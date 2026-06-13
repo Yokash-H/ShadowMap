@@ -9,6 +9,29 @@ window.chatHistory = [];
 
 const BACKEND = "http://127.0.0.1:5000";
 
+// Default State Configuration
+let smState = {
+    isOpen: false,
+    top: 24,
+    left: null, // Use right if null
+    right: 24,
+    width: 420,
+    height: 620
+};
+
+function saveState() {
+    chrome.storage.local.set({ sm_overlay_state: smState });
+}
+
+function loadState(callback) {
+    chrome.storage.local.get(['sm_overlay_state'], (result) => {
+        if (result.sm_overlay_state) {
+            smState = { ...smState, ...result.sm_overlay_state };
+        }
+        callback();
+    });
+}
+
 // =============================================================================
 // BLOCK SITE LOGIC
 // =============================================================================
@@ -163,9 +186,12 @@ function toggleOverlay() {
         overlay.style.display = isHidden ? "block" : "none";
         overlayActive = isHidden;
     }
+    
+    smState.isOpen = overlayActive;
+    saveState();
+
     if (overlayActive) {
         chrome.runtime.sendMessage({ type: "GET_CURRENT_SCAN", payload: extractPageData() });
-        // Restore last scan data if available
         if (window.currentScanData) updateScanTabUI(window.currentScanData);
     }
 }
@@ -189,10 +215,11 @@ function createOverlay() {
 
 .wrapper {
     position: fixed;
-    top: 24px;
-    right: 24px;
-    width: 420px;
-    max-height: 640px;
+    top: ${smState.top}px;
+    ${smState.left !== null ? `left: ${smState.left}px;` : `right: ${smState.right}px;`}
+    width: ${smState.width}px;
+    height: ${smState.height}px;
+    max-height: 90vh;
     background: linear-gradient(160deg, #080c14 0%, #0d1220 100%);
     backdrop-filter: blur(30px);
     -webkit-backdrop-filter: blur(30px);
@@ -205,6 +232,22 @@ function createOverlay() {
     display: flex;
     flex-direction: column;
     overflow: hidden;
+    user-select: none;
+}
+
+.sm-header {
+    cursor: move;
+}
+
+.resize-handle {
+    position: absolute;
+    bottom: 0;
+    right: 0;
+    width: 16px;
+    height: 16px;
+    cursor: nwse-resize;
+    background: linear-gradient(135deg, transparent 50%, rgba(139, 92, 246, 0.4) 50%);
+    border-radius: 0 0 16px 0;
 }
 
 /* ── Header ── */
@@ -839,11 +882,19 @@ function createOverlay() {
       <input id="chat-input" class="chat-input" type="text" placeholder="Ask Shadow AI anything..."/>
       <button id="chat-send-btn" class="btn-send">↑</button>
     </div>
+    <!-- Resize handle -->
+    <div class="resize-handle"></div>
   </div>
 </div>
+
 `;
 
     shadow.appendChild(container);
+    document.body.appendChild(root);
+    
+    const wrapper = shadow.querySelector('.wrapper');
+    initInteractivity(shadow, wrapper);
+    
     window.currentScanData = null;
 
     // ──────────────────────────────────────────────────
@@ -1334,7 +1385,82 @@ function updateScanTabUI(data) {
 function updateOverlayUI(data) { updateScanTabUI(data); }
 
 // =============================================================================
+// INTERACTIVE ENGINE (DRAG & RESIZE)
+// =============================================================================
+
+function initInteractivity(shadow, wrapper) {
+    let isDragging = false;
+    let isResizing = false;
+    let startX, startY, startW, startH, startTop, startLeft;
+
+    const header = shadow.querySelector('.sm-header');
+    const resizer = shadow.querySelector('.resize-handle');
+
+    header.onmousedown = (e) => {
+        isDragging = true;
+        startX = e.clientX;
+        startY = e.clientY;
+        const rect = wrapper.getBoundingClientRect();
+        startTop = rect.top;
+        startLeft = rect.left;
+        e.preventDefault();
+    };
+
+    resizer.onmousedown = (e) => {
+        isResizing = true;
+        startX = e.clientX;
+        startY = e.clientY;
+        startW = wrapper.offsetWidth;
+        startH = wrapper.offsetHeight;
+        e.preventDefault();
+        e.stopPropagation();
+    };
+
+    window.addEventListener('mousemove', (e) => {
+        if (isDragging) {
+            const dx = e.clientX - startX;
+            const dy = e.clientY - startY;
+            smState.top = Math.max(0, startTop + dy);
+            smState.left = Math.max(0, startLeft + dx);
+            smState.right = null; // Shift to fixed left/top coords
+            wrapper.style.top = smState.top + 'px';
+            wrapper.style.left = smState.left + 'px';
+            wrapper.style.right = 'auto';
+        }
+        if (isResizing) {
+            const dx = e.clientX - startX;
+            const dy = e.clientY - startY;
+            smState.width = Math.max(320, startW + dx);
+            smState.height = Math.max(200, startH + dy);
+            wrapper.style.width = smState.width + 'px';
+            wrapper.style.height = smState.height + 'px';
+        }
+    });
+
+    window.addEventListener('mouseup', () => {
+        if (isDragging || isResizing) {
+            isDragging = false;
+            isResizing = false;
+            saveState();
+        }
+    });
+}
+
+// =============================================================================
 // STARTUP
 // =============================================================================
 
-createFloatingButton();
+function initShadowMap() {
+    // Only inject in top-level frame to avoid multiple cockpits on one page
+    if (window.top !== window.self) return;
+
+    createFloatingButton();
+    loadState(() => {
+        if (smState.isOpen) {
+            // Delay slightly to ensure DOM is ready for Shadow Root insertion
+            setTimeout(() => toggleOverlay(), 500); 
+        }
+    });
+}
+
+initShadowMap();
