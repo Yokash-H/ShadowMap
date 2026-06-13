@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>ShadowMap AI Overlay</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="overlay-container">
+        <header>
+            <div class="logo">
+                <span class="shield-icon">🛡️</span>
+                <span class="logo-text">ShadowMap AI</span>
+            </div>
+            <div class="window-controls">
+                <button id="minimize-btn" class="control-btn">—</button>
+                <button id="close-btn" class="control-btn">×</button>
+            </div>
+        </header>
+
+        <main id="main-content">
+            <!-- Loading State -->
+            <div id="loading-state" class="state-view">
+                <div class="scanner-ring">
+                    <div class="inner-ring"></div>
+                    <div class="scan-line"></div>
+                </div>
+                <h2 class="pulse-text">Syncing Context...</h2>
+                <p id="scanning-url" class="url-hint">Waiting for telemetry agent</p>
+            </div>
+
+            <!-- Result View -->
+            <div id="result-view" class="state-view hidden">
+                <section class="score-section">
+                    <div class="score-circle">
+                        <svg viewBox="0 0 100 100">
+                            <circle class="bg" cx="50" cy="50" r="45"></circle>
+                            <circle id="score-fill" class="fill" cx="50" cy="50" r="45"></circle>
+                        </svg>
+                        <div class="score-text">
+                            <span id="score-number">0</span>
+                            <span class="score-label">RISK SCORE</span>
+                        </div>
+                    </div>
+                    <div id="risk-level-badge" class="risk-badge">LOW</div>
+                </section>
+
+                <section class="info-section">
+                    <h1 id="domain-name">...</h1>
+                    <div class="site-meta">
+                        <span id="trust-badge" class="status-pill">TRUSTED</span>
+                        <span id="ssl-status" class="status-pill">SSL VALID</span>
+                    </div>
+                </section>
+
+                <section class="threats-section">
+                    <h3>THREAT ANALYSIS</h3>
+                    <div id="reasons-container" class="pill-container">
+                        <!-- Reasons pills injected here -->
+                    </div>
+                </section>
+
+                <section class="ai-section">
+                    <div class="ai-header">
+                        <span class="ai-icon">🧠</span>
+                        <span>AI EXPLANATION</span>
+                    </div>
+                    <p id="ai-explanation">Waiting for full scan (F4)...</p>
+                </section>
+
+                <section class="actions-section">
+                    <button id="block-btn" class="btn btn-danger">Block Site</button>
+                    <button id="continue-btn" class="btn btn-secondary">Hide</button>
+                </section>
+            </div>
+        </main>
+
+        <footer>
+            <div class="hint"><strong>F4</strong>: SNAPSHOT | <strong>Alt+Shift+F</strong>: OVERLAY</div>
+            <div class="shadow-score">ShadowScore: <span id="footer-shadow-score">--</span></div>
+        </footer>
+    </div>
+    <script src="app.js"></script>
+</body>
+</html>
