@@ -1,6 +1,7 @@
 import whois
 from datetime import datetime
 import os
+import json
 import google.generativeai as genai
 from engines.domain_analyzer import check_https, extract_domain
 
@@ -55,7 +56,7 @@ def analyze_trust(url, domain):
         try:
             # This is a simplified placeholder. The actual prompt will be more complex.
             prompt = f"Analyze if the domain '{domain}' is impersonating a well-known brand. Return a JSON object with 'impersonation_probability' (0-100)."
-            model = genai.GenerativeModel('gemini-1.5-flash')
+            model = genai.GenerativeModel('gemini-2.5-flash')
             response = model.generate_content(prompt)
             text = response.text.strip()
             if text.startswith("```json"):

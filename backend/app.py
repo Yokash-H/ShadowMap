@@ -98,9 +98,22 @@ def perform_full_scan(url, payload=None):
     try:
         trust_analysis_result = analyze_trust(url, domain)
         trust_score = trust_analysis_result.get("trust_score")
+        trust_reasons = trust_analysis_result.get("reasons", [])
     except Exception as e:
         print(f"[TRUST ENGINE ERROR]: {e}")
         trust_score = None
+        trust_reasons = []
+
+    base_reasons = []
+    if trust_reasons:
+        base_reasons.extend(trust_reasons)
+    
+    phish_reason = phishing_data.get("reason", "")
+    if phish_reason and phish_reason != "No immediate threats detected.":
+        for r in phish_reason.split("."):
+            r_clean = r.strip()
+            if r_clean:
+                base_reasons.append(r_clean)
 
     result = calculate_shadow_score(
         url,
@@ -111,7 +124,8 @@ def perform_full_scan(url, payload=None):
         privacy_score=None,
         threat_score=None,
         exposure_score=None,
-        behavior_score=None
+        behavior_score=None,
+        base_reasons=base_reasons
     )
 
     if not result:
@@ -246,7 +260,7 @@ User: {message}
 Shadow: (respond in 2-4 sentences max, be specific and actionable. Use emojis sparingly for clarity.)"""
 
     try:
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel('gemini-2.5-flash')
         response = model.generate_content(prompt)
         reply = response.text.strip()
         print(f"[SHADOW CHAT] Reply: {reply[:80]}...")

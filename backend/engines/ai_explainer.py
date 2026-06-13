@@ -53,7 +53,7 @@ def generate_explanation(data):
     """
 
     try:
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel('gemini-2.5-flash')
         response = model.generate_content(prompt)
         text = response.text.strip()
         if "ShadowScore:" in text and "Findings:" in text:
