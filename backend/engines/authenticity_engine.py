@@ -58,7 +58,7 @@ def analyze_authenticity(url, domain):
             - impersonation_probability (int 0-100): Probability of impersonation.
             - brand_match_reason (string): A concise reason for the probability.
             """
-            model = genai.GenerativeModel('gemini-1.5-flash')
+            model = genai.GenerativeModel('gemini-2.5-flash')
             response = model.generate_content(prompt)
             text = response.text.strip()
             if text.startswith("```json"):

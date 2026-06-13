@@ -6,7 +6,6 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit
 from dotenv import load_dotenv
-import google.generativeai as genai
 
 load_dotenv()
 
@@ -28,10 +27,7 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
 DB_PATH = os.path.join(os.path.dirname(__file__), 'database', 'shadowmap.db')
 
-# Gemini for chat
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
+
 
 current_context = {
     "url": "https://google.com",
@@ -103,9 +99,22 @@ def perform_full_scan(url, payload=None):
     try:
         trust_analysis_result = analyze_trust(url, domain)
         trust_score = trust_analysis_result.get("trust_score")
+        trust_reasons = trust_analysis_result.get("reasons", [])
     except Exception as e:
         print(f"[TRUST ENGINE ERROR]: {e}")
         trust_score = None
+        trust_reasons = []
+
+    base_reasons = []
+    if trust_reasons:
+        base_reasons.extend(trust_reasons)
+    
+    phish_reason = phishing_data.get("reason", "")
+    if phish_reason and phish_reason != "No immediate threats detected.":
+        for r in phish_reason.split("."):
+            r_clean = r.strip()
+            if r_clean:
+                base_reasons.append(r_clean)
 
     result = calculate_shadow_score(
         url,
@@ -116,7 +125,8 @@ def perform_full_scan(url, payload=None):
         privacy_score=None,
         threat_score=None,
         exposure_score=None,
-        behavior_score=None
+        behavior_score=None,
+        base_reasons=base_reasons
     )
 
     if not result:
@@ -228,16 +238,37 @@ def chat():
     # Pass the history list directly to the engine
     history_list = history
 
-    if GEMINI_API_KEY:
-        # We could use Gemini if valid, but for now we route everything to local engine 
-        # to guarantee the offline feature works. Or we can let it try Gemini first.
-        # But wait, we know the key is an OAuth token and breaks. 
-        # Let's just use the robust offline engine!
-        pass
+
         
     reply = generate_chat_reply(message, ctx_str, history_list)
     return jsonify({"status": "success", "reply": reply})
 
+
+# =============================================================================
+# CREDENTIAL FIREWALL INCIDENT LOGGING
+# =============================================================================
+
+@app.route('/api/log_incident', methods=['POST'])
+def log_incident():
+    data = request.json or {}
+    domain = data.get('domain', 'unknown')
+    risk_score = data.get('risk_score', 0)
+    action_taken = data.get('action', 'blocked')
+    
+    print(f"[FIREWALL INCIDENT]: Intercepted {domain} (Risk: {risk_score}%, Action: {action_taken})")
+    
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.execute(
+            'INSERT INTO firewall_incidents (domain, risk_score, action_taken) VALUES (?, ?, ?)',
+            (domain, int(risk_score), action_taken)
+        )
+        conn.commit()
+        conn.close()
+        return jsonify({"status": "success", "message": "Incident logged successfully"})
+    except Exception as e:
+        print(f"[DB firewall_incidents Error]: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 # =============================================================================
 # SOCKET.IO

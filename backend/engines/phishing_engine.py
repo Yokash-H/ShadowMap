@@ -1,10 +1,6 @@
 import os
 import json
-import google.generativeai as genai
 
-API_KEY = os.getenv("GEMINI_API_KEY")
-if API_KEY:
-    genai.configure(api_key=API_KEY)
 
 def detect_phishing(payload, domain):
     """
@@ -40,10 +36,32 @@ def detect_phishing(payload, domain):
     domain_lower = domain.lower()
     
     # Check verified domains
-    verified_domains = ['github.com', 'amazon.in', 'amazon.com', 'google.com', 'roblox.com', 'microsoft.com', 'apple.com']
+    verified_domains = ['github.com', 'amazon.in', 'amazon.com', 'google.com', 'roblox.com', 'microsoft.com', 'apple.com', 'paypal.com']
     is_verified = domain_lower in verified_domains
 
-    if not is_verified:
+    # Brand Impersonation check
+    brands = {
+        'paypal': ['paypal.com'],
+        'google': ['google.com', 'google.co.in'],
+        'facebook': ['facebook.com'],
+        'netflix': ['netflix.com'],
+        'amazon': ['amazon.com', 'amazon.in'],
+        'microsoft': ['microsoft.com', 'live.com', 'outlook.com'],
+        'apple': ['apple.com', 'icloud.com'],
+        'roblox': ['roblox.com'],
+        'steam': ['steampowered.com', 'steamcommunity.com']
+    }
+    
+    brand_spoofed = False
+    for brand, leg_domains in brands.items():
+        if brand in title or brand in domain_lower:
+            if not any(domain_lower.endswith(ld) for ld in leg_domains):
+                brand_spoofed = True
+                domain_spoof_probability = max(domain_spoof_probability, 85)
+                if has_password or 'login' in url.lower() or 'signin' in url.lower():
+                    credential_risk = max(credential_risk, 80)
+
+    if not is_verified and not brand_spoofed:
         if any(keyword in domain_lower for keyword in suspicious_keywords):
             domain_spoof_probability += 35
     
@@ -61,9 +79,18 @@ def detect_phishing(payload, domain):
     
     # 3. Redirect Risk
     redirect_risk = 0
-    if 'redirect=' in url.lower() or 'url=' in url.lower() or 'next=' in url.lower() or 'goto=' in url.lower() or 'return_to=' in url.lower():
+    if any(param in url.lower() for param in ['redirect=', 'url=', 'next=', 'goto=', 'return_to=']):
         redirect_risk += 55
         
+    redirects = int(payload.get('redirects', 0))
+    if redirects > 0:
+        redirect_risk += 30 + (redirects * 15)
+        
+    if payload.get('metaRefresh', False):
+        redirect_risk += 45
+        
+    redirect_risk = min(100, redirect_risk)
+    
     # 4. Phishing Probability (Composite)
     phishing_probability = 0
     
@@ -99,6 +126,7 @@ def detect_phishing(payload, domain):
         if credential_risk > 40: reasons.append("Elevated credential risk detected.")
         if domain_spoof_probability > 40: reasons.append("Domain exhibits possible spoofing patterns.")
         if redirect_risk > 40: reasons.append("Suspicious redirects found in URL.")
+        if redirects > 0: reasons.append(f"Redirection chain detected ({redirects} redirect(s)).")
         if not is_https: reasons.append("Insecure HTTP connection.")
         if len(trackers) == 0 and has_password: reasons.append("Password field present but no standard site tracking found.")
         if re.match(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$", domain): reasons.append("IP address used instead of domain name.")
@@ -112,46 +140,7 @@ def detect_phishing(payload, domain):
         "reason": reason
     }
     
-    # Enhance with Gemini if API key is present
-    if API_KEY:
-        prompt = f"""
-        Analyze this webpage data for phishing.
-        URL: {url}
-        Domain: {domain}
-        Title: {title}
-        Forms: {json.dumps(forms)}
-        Trackers: {trackers}
-        Is HTTPS: {is_https}
-        
-        Current calculated heuristic risks:
-        Phishing: {phishing_probability}%
-        Spoof: {domain_spoof_probability}%
-        Credential: {credential_risk}%
-        Redirect: {redirect_risk}%
-        
-        Adjust these scores based on your AI analysis if you see clear threats.
-        Return ONLY a valid JSON object with EXACTLY these fields:
-        - phishing_probability (int 0-100)
-        - domain_spoof_probability (int 0-100)
-        - credential_risk (int 0-100)
-        - redirect_risk (int 0-100)
-        - reason (string, explain your findings clearly)
-        """
-        try:
-            model = genai.GenerativeModel('gemini-1.5-flash')
-            response = model.generate_content(prompt)
-            text = response.text.strip()
-            if text.startswith("```json"):
-                text = text[7:-3]
-            elif text.startswith("```"):
-                text = text[3:-3]
-            ai_result = json.loads(text)
-            
-            # Validate output keys
-            if all(k in ai_result for k in ["phishing_probability", "domain_spoof_probability", "credential_risk", "redirect_risk", "reason"]):
-                result = ai_result
-        except Exception as e:
-            print(f"Gemini Engine Error (fallback to heuristic): {e}")
+
 
     # Post-process to enforce a small baseline noise (1-2%) instead of 0%
     import random

@@ -1,19 +1,18 @@
 from urllib.parse import urlparse
 from engines.domain_analyzer import extract_domain, check_https, get_simulated_domain_age, detect_suspicious_patterns
 
-def calculate_shadow_score(url, payload=None, phishing_data=None, trust_score=None, authenticity_score=None, privacy_score=None, threat_score=None, exposure_score=None, behavior_score=None):
+def calculate_shadow_score(url, payload=None, phishing_data=None, trust_score=None, authenticity_score=None, privacy_score=None, threat_score=None, exposure_score=None, behavior_score=None, base_reasons=None):
     if not url:
         return None
 
     domain = extract_domain(url)
+    reasons = list(base_reasons) if base_reasons else []
     
     if payload is None:
         payload = {}
     if phishing_data is None:
         phishing_data = {}
         
-    reasons = []
-    
     # --- Context-Aware Adjustments ---
     path = urlparse(url).path.lower()
     is_sensitive = any(kw in path for kw in ['login', 'signin', 'admin', 'bank', 'secure', 'billing', 'password'])
@@ -44,6 +43,11 @@ def calculate_shadow_score(url, payload=None, phishing_data=None, trust_score=No
         if check_https(url):
             trust_score += 30 # Boost for HTTPS
         trust_score = min(100, trust_score)
+
+    # If it's a sensitive page, lower the base scores to be more aggressive
+    if is_sensitive:
+        trust_score *= 0.9
+        reasons.append(f"Sensitive subpage detected ({path}) - elevated monitoring active.")
 
     # Privacy Score (initial: based on number of trackers)
     if privacy_score is None:
@@ -167,6 +171,7 @@ def calculate_shadow_score(url, payload=None, phishing_data=None, trust_score=No
         "exposure_score_legacy": 100 - shadow_score, # Renamed to avoid confusion with new category
         "trackers_detected": len(payload.get('trackers', [])),
         "reasons": reasons,
+        "ssl_valid": check_https(url),
         "category_scores": {
             "trust": int(trust_score),
             "authenticity": int(authenticity_score),

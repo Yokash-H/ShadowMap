@@ -1,9 +1,5 @@
 import os
-import google.generativeai as genai
 
-API_KEY = os.getenv("GEMINI_API_KEY")
-if API_KEY:
-    genai.configure(api_key=API_KEY)
 
 def generate_explanation(data):
     """
@@ -27,44 +23,7 @@ def generate_explanation(data):
 
     fallback_text = f"ShadowMap AI analyzed {domain}\n\nShadowScore: {shadow_score} ({threat_level})\n\nFindings:\n{bullet_reasons}\n\nRecommendation:\n{rec}"
     
-    if not API_KEY:
-        return fallback_text
-
-    trackers = data.get('trackers_detected', 0)
-    
-    prompt = f"""
-    You are ShadowMap AI, a cybersecurity intelligence agent.
-    You just analyzed the domain "{domain}".
-    ShadowScore: {shadow_score}/100
-    Threat Level: {threat_level}
-    Trackers Detected: {trackers}
-    Technical Reasons/Flags: {', '.join(reasons)}
-    
-    Write an explanation exactly matching this format:
-
-    ShadowMap AI analyzed {domain}
-
-    ShadowScore: {shadow_score} ({threat_level})
-
-    Findings:
-    • [finding 1] (Ensure you explicitly mention if any DOM mutations, compromised passwords, trackers, or insecure forms were detected)
-    • [finding 2]
-    • [finding 3]
-
-    Recommendation:
-    [Concise 1-sentence security recommendation]
-    """
-
-    try:
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        response = model.generate_content(prompt)
-        text = response.text.strip()
-        if "ShadowScore:" in text and "Findings:" in text:
-            return text
-        return fallback_text
-    except Exception as e:
-        print(f"Gemini Explanation Error: {e}")
-        return fallback_text
+    return fallback_text
 
 def generate_recommendation(risk_level, reasons):
     if risk_level in ['CRITICAL', 'DANGEROUS']:
