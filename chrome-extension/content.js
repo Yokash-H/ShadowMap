@@ -1,37 +1,42 @@
-// ShadowMap Content Script
+// ShadowMap Content Script — Full 5-Tab Cockpit Overlay
+// Tabs: SCAN | PHISH | APK | BREACH | CHAT
 
-console.log("SHADOWMAP CONTENT SCRIPT LOADED");
+console.log("SHADOWMAP AI CONTENT SCRIPT LOADED — v2.0");
 
 let overlayActive = false;
+window.currentScanData = null;
+window.chatHistory = [];
 
-// =========================
-// BLOCKING LOGIC
-// =========================
+const BACKEND = "http://127.0.0.1:5000";
+
+// =============================================================================
+// BLOCK SITE LOGIC
+// =============================================================================
 
 function checkBlockedSite() {
     chrome.storage.local.get(['blockedDomains'], function(result) {
         const domains = result.blockedDomains || [];
         if (domains.includes(window.location.hostname)) {
             document.body.innerHTML = `
-                <div style="position:fixed;top:0;left:0;width:100vw;height:100vh;background:#0f1219;z-index:2147483647;display:flex;flex-direction:column;justify-content:center;align-items:center;color:white;font-family:sans-serif;text-align:center;">
-                    <h1 style="color:#ef4444;font-size:48px;margin-bottom:10px;">🚫 Website Blocked</h1>
-                    <p style="font-size:24px;margin-bottom:20px;">This site was blocked by ShadowMap.</p>
-                    <p style="font-size:18px;color:#cbd5e1;margin-bottom:40px;">Domain: ${window.location.hostname}<br>Reason: User blocked this site.</p>
-                    <div style="display:flex;gap:20px;">
-                        <button onclick="window.history.back()" style="padding:15px 30px;font-size:18px;background:transparent;border:2px solid #3b82f6;color:#3b82f6;border-radius:8px;cursor:pointer;">Go Back</button>
-                        <button id="sm-unblock-page-btn" style="padding:15px 30px;font-size:18px;background:#ef4444;border:none;color:white;border-radius:8px;cursor:pointer;">Unblock Site</button>
+                <div style="position:fixed;top:0;left:0;width:100vw;height:100vh;background:#080c14;z-index:2147483647;
+                     display:flex;flex-direction:column;justify-content:center;align-items:center;
+                     color:white;font-family:sans-serif;text-align:center;">
+                    <div style="font-size:64px;margin-bottom:16px;">🚫</div>
+                    <h1 style="color:#ef4444;font-size:36px;margin-bottom:8px;font-weight:700;">Website Blocked</h1>
+                    <p style="font-size:18px;color:#94a3b8;margin-bottom:8px;">ShadowMap AI blocked this site for your protection.</p>
+                    <p style="font-size:14px;color:#64748b;margin-bottom:40px;">${window.location.hostname}</p>
+                    <div style="display:flex;gap:16px;">
+                        <button onclick="window.history.back()" style="padding:12px 28px;font-size:15px;background:transparent;
+                            border:1px solid #3b82f6;color:#3b82f6;border-radius:8px;cursor:pointer;">← Go Back</button>
+                        <button id="sm-unblock-page-btn" style="padding:12px 28px;font-size:15px;background:#ef4444;
+                            border:none;color:white;border-radius:8px;cursor:pointer;">Unblock Site</button>
                     </div>
-                </div>
-            `;
+                </div>`;
             document.getElementById('sm-unblock-page-btn').addEventListener('click', unblockCurrentSite);
         }
     });
 }
 checkBlockedSite();
-
-// =========================
-// HELPER FUNCTIONS
-// =========================
 
 function blockCurrentSite() {
     const domain = window.location.hostname;
@@ -39,16 +44,7 @@ function blockCurrentSite() {
         let domains = result.blockedDomains || [];
         if (!domains.includes(domain)) {
             domains.push(domain);
-            chrome.storage.local.set({ blockedDomains: domains }, function() {
-                const root = document.getElementById("shadowmap-overlay-root");
-                if (root) {
-                    const btn = root.shadowRoot.getElementById("bc-btn-confirm");
-                    if (btn) btn.textContent = "✓ Site blocked";
-                }
-                setTimeout(() => {
-                    location.reload();
-                }, 1000);
-            });
+            chrome.storage.local.set({ blockedDomains: domains }, () => setTimeout(() => location.reload(), 1000));
         }
     });
 }
@@ -56,187 +52,105 @@ function blockCurrentSite() {
 function unblockCurrentSite() {
     const domain = window.location.hostname;
     chrome.storage.local.get(['blockedDomains'], function(result) {
-        let domains = result.blockedDomains || [];
-        domains = domains.filter(d => d !== domain);
-        chrome.storage.local.set({ blockedDomains: domains }, function() {
-            const btn = document.getElementById('sm-unblock-page-btn');
-            if (btn) btn.textContent = "✓ Site unblocked";
-            setTimeout(() => {
-                location.reload();
-            }, 1000);
-        });
+        let domains = (result.blockedDomains || []).filter(d => d !== domain);
+        chrome.storage.local.set({ blockedDomains: domains }, () => setTimeout(() => location.reload(), 1000));
     });
 }
+
+// =============================================================================
+// PAGE DATA EXTRACTION
+// =============================================================================
+
+function extractPageData() {
+    const data = { url: window.location.href, hostname: window.location.hostname, title: document.title, trackers: [], forms: [] };
+    const signatures = {
+        'Google Analytics': 'google-analytics', 'Google Tag Manager': 'googletagmanager.com',
+        'Meta Pixel': 'fbevents.js', 'TikTok Pixel': 'analytics.tiktok.com', 'Hotjar': 'hotjar.com', 'FingerprintJS': 'fingerprintjs'
+    };
+    document.querySelectorAll('script').forEach(script => {
+        const c = script.src || script.innerText || "";
+        for (const [name, sig] of Object.entries(signatures)) {
+            if (c.toLowerCase().includes(sig.toLowerCase()) && !data.trackers.includes(name)) data.trackers.push(name);
+        }
+    });
+    document.querySelectorAll('form').forEach(form => {
+        data.forms.push({ action: form.action, hasPassword: !!form.querySelector('input[type="password"]'), inputs: form.querySelectorAll('input').length });
+    });
+    return data;
+}
+
+// =============================================================================
+// COPY REPORT
+// =============================================================================
 
 function copySecurityReport() {
     const data = window.currentScanData;
     if (!data) return;
-    
-    let report = `ShadowMap Security Report\n\n`;
-    report += `Domain: ${data.domain || window.location.hostname}\n`;
-    report += `Threat Level: ${data.threat_level || "UNKNOWN"}\n`;
-    report += `ShadowScore: ${data.shadow_score || 0}\n\n`;
-    report += `Phishing Risk: ${data.phishing_probability || 0}%\n`;
-    report += `Domain Spoof Risk: ${data.domain_spoof_probability || 0}%\n`;
-    report += `Credential Risk: ${data.credential_risk || 0}%\n`;
-    report += `Redirect Risk: ${data.redirect_risk || 0}%\n\n`;
-    report += `Reasons:\n`;
+    let report = `ShadowMap Security Report\n\nDomain: ${data.domain || window.location.hostname}\nThreat Level: ${data.threat_level || "UNKNOWN"}\nShadowScore: ${data.shadow_score || 0}\n\nPhishing Risk: ${data.phishing_probability || 0}%\nDomain Spoof Risk: ${data.domain_spoof_probability || 0}%\nCredential Risk: ${data.credential_risk || 0}%\nRedirect Risk: ${data.redirect_risk || 0}%\n\nAI Analysis:\n${data.ai_explanation || ""}\n`;
     (data.reasons || []).forEach(r => report += `* ${r}\n`);
-    report += `\nRecommended Actions:\n`;
-    (data.recommended_actions || []).forEach(a => report += `* ${a}\n`);
-    
     navigator.clipboard.writeText(report).then(() => {
-        const root = document.getElementById("shadowmap-overlay-root");
-        if (root) {
-            const btn = root.shadowRoot.getElementById("pc-btn-copy");
-            if (btn) {
-                btn.textContent = "✓ Report copied";
-                setTimeout(() => btn.textContent = "Copy Report", 2000);
-            }
-        }
+        const btn = getShadow()?.getElementById("pc-btn-copy");
+        if (btn) { btn.textContent = "✓ Copied!"; setTimeout(() => btn.textContent = "Copy Report", 2000); }
     });
 }
 
-function renderDetailedAnalysis() {
-    const shadow = document.getElementById("shadowmap-overlay-root").shadowRoot;
-    shadow.getElementById("protection-center-view").classList.add("hidden");
-    
-    const btn = shadow.getElementById("pc-btn-analysis");
-    btn.textContent = "Loading...";
-    
-    setTimeout(() => {
-        btn.textContent = "Detailed Analysis";
-        shadow.getElementById("detailed-analysis-view").classList.remove("hidden");
-        
-        const data = window.currentScanData || {};
-        shadow.getElementById("da-domain").textContent = data.domain || window.location.hostname;
-        shadow.getElementById("da-threat").textContent = data.threat_level || "UNKNOWN";
-        shadow.getElementById("da-shadow").textContent = data.shadow_score || "0";
-        shadow.getElementById("da-trust").textContent = (100 - (data.exposure_score || 0)) || "0";
-        shadow.getElementById("da-risk").textContent = (100 - (data.shadow_score || 0)) || "0";
-        shadow.getElementById("da-exposure").textContent = (data.exposure_score !== undefined ? data.exposure_score : "0");
-        
-        const reasonsList = shadow.getElementById("da-reasons");
-        reasonsList.innerHTML = "";
-        (data.reasons || ["No specific reasons provided"]).forEach(r => {
-            const li = document.createElement("li");
-            li.textContent = r;
-            reasonsList.appendChild(li);
-        });
-        
-        const actionsList = shadow.getElementById("da-actions");
-        actionsList.innerHTML = "";
-        (data.recommended_actions || ["Exercise normal caution"]).forEach(a => {
-            const li = document.createElement("li");
-            li.textContent = a;
-            actionsList.appendChild(li);
-        });
+// =============================================================================
+// F4 HOTKEY + MESSAGES
+// =============================================================================
 
-        const breakdown = shadow.getElementById("da-breakdown");
-        breakdown.innerHTML = "";
-        const risks = [
-            { label: "Phishing Risk", val: data.phishing_probability || 0 },
-            { label: "Domain Spoof Risk", val: data.domain_spoof_probability || 0 },
-            { label: "Credential Risk", val: data.credential_risk || 0 },
-            { label: "Redirect Risk", val: data.redirect_risk || 0 }
-        ];
-        
-        risks.forEach(risk => {
-            let color = "#22c55e"; // low green
-            if (risk.val > 25) color = "#eab308"; // medium yellow
-            if (risk.val > 75) color = "#ef4444"; // high red
-            
-            breakdown.innerHTML += `
-                <div style="display:flex;align-items:center;justify-content:space-between;font-size:12px;margin-top:4px;">
-                    <span>${risk.label}</span>
-                    <span>${risk.val}%</span>
-                </div>
-                <div style="width:100%;height:6px;background:rgba(255,255,255,0.1);border-radius:3px;overflow:hidden;margin-bottom:6px;">
-                    <div style="width:${risk.val}%;height:100%;background:${color};"></div>
-                </div>
-            `;
-        });
-    }, 400); // Simulate loading time for UX
-}
+window.addEventListener("keydown", (e) => { if (e.key === "F4") { e.preventDefault(); toggleOverlay(); } });
 
-function updateProtectionCenter(data) {
-    const shadow = document.getElementById("shadowmap-overlay-root").shadowRoot;
-    const tl = data.threat_level || "UNKNOWN";
-    let recsHtml = "";
-    
-    if (tl === "TRUSTED") {
-        recsHtml = "✓ Site appears safe<br>✓ Continue browsing normally";
-    } else if (tl === "SAFE") {
-        recsHtml = "✓ Minor risks detected<br>✓ Exercise normal caution";
-    } else if (tl === "WARNING") {
-        recsHtml = "⚠ Potential security concerns detected<br>⚠ Avoid entering sensitive information";
-    } else if (tl === "DANGEROUS") {
-        recsHtml = "🚨 High risk detected<br>🚨 Do not enter passwords<br>🚨 Leave immediately";
-    } else if (tl === "CRITICAL") {
-        recsHtml = "🚨 Phishing indicators detected<br>🚨 Credentials may be at risk<br>🚨 Leave site immediately";
-    } else {
-        recsHtml = "⚠ Unknown status. Proceed with caution.";
-    }
-    
-    shadow.getElementById("pc-recs").innerHTML = recsHtml;
-}
-
-// =========================
-// F4 HOTKEY
-// =========================
-
-window.addEventListener("keydown", (e) => {
-    if (e.key === "F4") {
-        e.preventDefault();
-        toggleOverlay();
-    }
-});
-
-// =========================
-// MESSAGE LISTENER
-// =========================
 chrome.runtime.onMessage.addListener((message) => {
-    if (message.type === "TOGGLE_OVERLAY") {
-        toggleOverlay();
-    }
-    if (message.type === "UPDATE_OVERLAY_DATA") {
-        updateOverlayUI(message.data);
-    }
+    if (message.type === "TOGGLE_OVERLAY") toggleOverlay();
+    if (message.type === "UPDATE_OVERLAY_DATA") updateScanTabUI(message.data);
 });
 
-// =========================
-// FLOATING BUTTON
-// =========================
+// =============================================================================
+// FLOATING FAB
+// =============================================================================
 
 function createFloatingButton() {
     if (document.getElementById("shadowmap-fab")) return;
     const btn = document.createElement("div");
     btn.id = "shadowmap-fab";
     btn.innerHTML = "🛡";
-    btn.style.position = "fixed";
-    btn.style.bottom = "25px";
-    btn.style.right = "25px";
-    btn.style.width = "68px";
-    btn.style.height = "68px";
-    btn.style.borderRadius = "50%";
-    btn.style.display = "flex";
-    btn.style.alignItems = "center";
-    btn.style.justifyContent = "center";
-    btn.style.fontSize = "32px";
-    btn.style.cursor = "pointer";
-    btn.style.zIndex = "2147483646";
-    btn.style.background = "linear-gradient(135deg,#8B5CF6,#22D3EE)";
-    btn.style.boxShadow = "0 0 25px rgba(139,92,246,.5),0 0 60px rgba(34,211,238,.25)";
-    btn.style.transition = "all .25s ease";
+    Object.assign(btn.style, {
+        position: "fixed", bottom: "25px", right: "25px", width: "68px", height: "68px",
+        borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center",
+        fontSize: "32px", cursor: "pointer", zIndex: "2147483646",
+        background: "linear-gradient(135deg,#8B5CF6,#22D3EE)",
+        boxShadow: "0 0 25px rgba(139,92,246,.5),0 0 60px rgba(34,211,238,.25)", transition: "all .25s ease"
+    });
     btn.addEventListener("mouseenter", () => btn.style.transform = "scale(1.08)");
     btn.addEventListener("mouseleave", () => btn.style.transform = "scale(1)");
     btn.addEventListener("click", toggleOverlay);
     document.body.appendChild(btn);
 }
 
-// =========================
+// =============================================================================
+// HELPER: get shadow root
+// =============================================================================
+
+function getShadow() {
+    return document.getElementById("shadowmap-overlay-root")?.shadowRoot || null;
+}
+
+// =============================================================================
+// TAB SWITCHER
+// =============================================================================
+
+function switchTab(tabName) {
+    const shadow = getShadow();
+    if (!shadow) return;
+    ['scan', 'phish', 'apk', 'breach', 'chat'].forEach(t => {
+        shadow.getElementById(`tab-btn-${t}`).classList.toggle('active', t === tabName);
+        shadow.getElementById(`tab-panel-${t}`).classList.toggle('hidden', t !== tabName);
+    });
+}
+
+// =============================================================================
 // OVERLAY TOGGLE
-// =========================
+// =============================================================================
 
 function toggleOverlay() {
     let overlay = document.getElementById("shadowmap-overlay-root");
@@ -245,64 +159,20 @@ function toggleOverlay() {
         overlay = document.getElementById("shadowmap-overlay-root");
         overlayActive = true;
     } else {
-        overlay.style.display = overlay.style.display === "none" ? "block" : "none";
-        overlayActive = overlay.style.display === "block";
-        // Reset view to dashboard whenever overlay is toggled
-        if(overlayActive) {
-            overlay.shadowRoot.getElementById("dashboard-view").classList.remove("hidden");
-            overlay.shadowRoot.getElementById("protection-center-view").classList.add("hidden");
-            overlay.shadowRoot.getElementById("detailed-analysis-view").classList.add("hidden");
-            overlay.shadowRoot.getElementById("block-confirm-view").classList.add("hidden");
-        }
+        const isHidden = overlay.style.display === "none";
+        overlay.style.display = isHidden ? "block" : "none";
+        overlayActive = isHidden;
     }
     if (overlayActive) {
         chrome.runtime.sendMessage({ type: "GET_CURRENT_SCAN", payload: extractPageData() });
+        // Restore last scan data if available
+        if (window.currentScanData) updateScanTabUI(window.currentScanData);
     }
 }
 
-// =========================
-// PAGE EXTRACTION
-// =========================
-
-function extractPageData() {
-    const data = {
-        url: window.location.href,
-        hostname: window.location.hostname,
-        title: document.title,
-        trackers: [],
-        forms: []
-    };
-    const scripts = document.querySelectorAll('script');
-    const signatures = {
-        'Google Analytics': 'google-analytics',
-        'Google Tag Manager': 'googletagmanager.com',
-        'Meta Pixel': 'fbevents.js',
-        'TikTok Pixel': 'analytics.tiktok.com',
-        'Hotjar': 'hotjar.com',
-        'FingerprintJS': 'fingerprintjs'
-    };
-    scripts.forEach(script => {
-        const content = script.src || script.innerText || "";
-        for (const [name, sig] of Object.entries(signatures)) {
-            if (content.toLowerCase().includes(sig.toLowerCase()) && !data.trackers.includes(name)) {
-                data.trackers.push(name);
-            }
-        }
-    });
-    const forms = document.querySelectorAll('form');
-    forms.forEach(form => {
-        data.forms.push({
-            action: form.action,
-            hasPassword: form.querySelector('input[type="password"]') !== null,
-            inputs: form.querySelectorAll('input').length
-        });
-    });
-    return data;
-}
-
-// =========================
-// CREATE OVERLAY
-// =========================
+// =============================================================================
+//  CREATE OVERLAY — Full Shadow DOM
+// =============================================================================
 
 function createOverlay() {
     if (document.getElementById("shadowmap-overlay-root")) return;
@@ -313,607 +183,1071 @@ function createOverlay() {
 
     container.innerHTML = `
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
 
 .wrapper {
     position: fixed;
-    top: 30px;
-    right: 30px;
-    width: 380px;
-    background: linear-gradient(180deg, rgba(17,21,32,0.95) 0%, rgba(13,17,26,0.95) 100%);
-    backdrop-filter: blur(25px);
-    -webkit-backdrop-filter: blur(25px);
+    top: 24px;
+    right: 24px;
+    width: 420px;
+    max-height: 640px;
+    background: linear-gradient(160deg, #080c14 0%, #0d1220 100%);
+    backdrop-filter: blur(30px);
+    -webkit-backdrop-filter: blur(30px);
     border-radius: 16px;
+    border: 1px solid rgba(139, 92, 246, 0.3);
     color: white;
     font-family: 'Inter', sans-serif;
     z-index: 2147483647;
-    box-shadow: 0 30px 60px rgba(0,0,0,0.6), 0 0 100px rgba(99, 102, 241, 0.15), inset 0 1px 1px rgba(255,255,255,0.05);
-    padding: 16px 20px;
-    box-sizing: border-box;
-}
-
-.header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 10px;
-}
-
-.title {
-    font-size: 15px;
-    font-weight: 500;
-    letter-spacing: 3px;
-    color: #94a3b8;
-    text-transform: uppercase;
-}
-
-.badge {
-    margin-top: 10px;
-    padding: 6px 16px;
-    border-radius: 6px;
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 2px;
-    text-transform: uppercase;
-    transition: all 0.3s ease;
-}
-.badge-trusted {
-    color: #22c55e;
-    border: 1px solid rgba(34,197,94,.5);
-    box-shadow: 0 0 15px rgba(34,197,94,.3);
-    background: rgba(34,197,94,.1);
-}
-.badge-safe {
-    color: #06b6d4;
-    border: 1px solid rgba(6,182,212,.5);
-    box-shadow: 0 0 15px rgba(6,182,212,.3);
-    background: rgba(6,182,212,.1);
-}
-.badge-warning {
-    color: #eab308;
-    border: 1px solid rgba(234,179,8,.5);
-    box-shadow: 0 0 15px rgba(234,179,8,.3);
-    background: rgba(234,179,8,.1);
-}
-.badge-dangerous {
-    color: #f97316;
-    border: 1px solid rgba(249,115,22,.5);
-    box-shadow: 0 0 15px rgba(249,115,22,.3);
-    background: rgba(249,115,22,.1);
-}
-.badge-critical {
-    color: #ef4444;
-    border: 1px solid rgba(239,68,68,.5);
-    box-shadow: 0 0 15px rgba(239,68,68,.3);
-    background: rgba(239,68,68,.1);
-}
-
-.logo {
-    width: 32px;
-    height: 32px;
-    position: relative;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-}
-
-.logo::before {
-    content: '';
-    position: absolute;
-    width: 100%;
-    height: 100%;
-    background: radial-gradient(circle, #8b5cf6 0%, #3b82f6 100%);
-    opacity: 0.5;
-    filter: blur(10px);
-    border-radius: 50%;
-}
-
-.logo svg {
-    position: relative;
-    width: 20px;
-    height: 20px;
-    z-index: 2;
-    filter: drop-shadow(0 0 5px rgba(139, 92, 246, 0.8));
-}
-
-.domain-container {
-    text-align: center;
-    margin-top: -5px;
-    margin-bottom: 16px;
-    width: 100%;
-    display: block;
-}
-
-.domain {
-    color: #f97316;
-    font-size: 15px;
-    font-weight: 600;
-    letter-spacing: 0.5px;
-    text-shadow: 0 0 12px rgba(249, 115, 22, 0.6);
-    word-break: break-all;
-    display: inline-block;
-}
-
-.dashboard-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 16px;
-    padding: 0 5px;
-}
-
-.score-column {
+    box-shadow: 0 32px 64px rgba(0,0,0,0.7), 0 0 80px rgba(139,92,246,0.12), inset 0 1px 0 rgba(255,255,255,0.05);
     display: flex;
     flex-direction: column;
-    align-items: center;
-}
-
-.score-ring-container {
-    position: relative;
-    width: 110px;
-    height: 110px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.ring-svg {
-    position: absolute;
-    width: 100%;
-    height: 100%;
-    filter: drop-shadow(0 0 15px rgba(239, 68, 68, 0.4));
-    transform: rotate(-90deg);
-}
-
-.score-content {
-    position: relative;
-    z-index: 2;
-    text-align: center;
-}
-
-.score {
-    font-size: 34px;
-    font-weight: 600;
-    color: #ffffff;
-    line-height: 1.1;
-}
-
-.scoreLabel {
-    font-size: 11px;
-    color: #94a3b8;
-}
-
-.exposure-container {
-    text-align: center;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-}
-
-.sphere-container {
-    position: relative;
-    width: 75px;
-    height: 75px;
-    margin-bottom: 12px;
-}
-
-.sphere {
-    width: 100%;
-    height: 100%;
-    border-radius: 50%;
-    background: radial-gradient(circle at 35% 35%, rgba(253, 186, 116, 0.9) 0%, rgba(220, 38, 38, 0.8) 40%, rgba(69, 10, 10, 0.95) 100%);
-    box-shadow: inset -10px -10px 20px rgba(0,0,0,0.6), inset 10px 10px 20px rgba(255,255,255,0.3), 0 0 30px rgba(220, 38, 38, 0.4);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    position: relative;
     overflow: hidden;
 }
 
-.sphere::after {
-    content: '';
-    position: absolute;
-    top: 5%;
-    left: 15%;
-    width: 40%;
-    height: 40%;
-    background: radial-gradient(ellipse at center, rgba(255,255,255,0.4) 0%, transparent 70%);
-    transform: rotate(-45deg);
-    border-radius: 50%;
-}
-
-.exposure-value {
-    font-size: 18px;
-    font-weight: 600;
-    color: white;
-    text-shadow: 0 2px 4px rgba(0,0,0,0.5);
-    z-index: 2;
-    position: relative;
-}
-
-.exposure-label {
-    font-size: 11px;
-    color: #cbd5e1;
-}
-
-.pills-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 8px;
-    margin-bottom: 16px;
-}
-
-.pill {
-    background: rgba(20, 15, 20, 0.7);
-    border: 1px solid rgba(239, 68, 68, 0.3);
-    border-radius: 6px;
-    padding: 8px 10px;
-    font-size: 11px;
-    color: #e2e8f0;
+/* ── Header ── */
+.sm-header {
     display: flex;
+    align-items: center;
     justify-content: space-between;
+    padding: 14px 18px 10px;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+    flex-shrink: 0;
+}
+.sm-logo {
+    display: flex;
     align-items: center;
-    transition: all 0.3s ease;
-    cursor: default;
+    gap: 9px;
 }
-
-.pill-icon {
-    font-size: 12px;
-    font-weight: 600;
-    transition: all 0.3s ease;
-}
-
-.ai-card {
-    position: relative;
+.sm-logo-icon {
+    width: 30px; height: 30px;
+    background: linear-gradient(135deg,#8b5cf6,#22d3ee);
     border-radius: 8px;
-    padding: 2px;
-    background: linear-gradient(135deg, rgba(168, 85, 247, 0.8), rgba(6, 182, 212, 0.8));
-    margin-bottom: 16px;
-    box-shadow: 0 0 25px rgba(168, 85, 247, 0.25);
-    animation: borderGlow 4s ease-in-out infinite alternate;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 16px;
+    box-shadow: 0 0 14px rgba(139,92,246,.5);
 }
-
-@keyframes borderGlow {
-    0% { box-shadow: 0 0 15px rgba(168, 85, 247, 0.2); }
-    100% { box-shadow: 0 0 35px rgba(6, 182, 212, 0.4); }
+.sm-logo-text {
+    font-size: 13px; font-weight: 700; letter-spacing: 2.5px;
+    color: #e2e8f0; text-transform: uppercase;
 }
-
-.ai-card-inner {
-    background: #0f1219;
-    border-radius: 6px;
-    padding: 14px;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 11px;
-    color: #e2e8f0;
-    line-height: 1.5;
-    white-space: pre-wrap;
-    min-height: 60px;
+.sm-logo-sub { font-size: 10px; color: #475569; letter-spacing: 1px; }
+.sm-close {
+    width: 28px; height: 28px; border-radius: 6px;
+    background: rgba(255,255,255,0.06); border: none; color: #64748b;
+    cursor: pointer; font-size: 16px; display: flex; align-items: center; justify-content: center;
+    transition: all .2s;
 }
+.sm-close:hover { background: rgba(255,255,255,0.12); color: #e2e8f0; }
 
-.actions {
+/* ── Tab Bar ── */
+.tab-bar {
     display: flex;
-    justify-content: center;
-    align-items: center;
-    gap: 12px;
+    padding: 8px 14px 0;
+    gap: 2px;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+    flex-shrink: 0;
+    background: rgba(0,0,0,0.2);
 }
-
-.btn-primary, .btn-secondary {
-    border: none;
-    padding: 10px 16px;
-    border-radius: 6px;
-    font-size: 12px;
-    cursor: pointer;
-    font-family: 'Inter', sans-serif;
-    transition: all 0.3s ease;
+.tab-btn {
+    flex: 1; padding: 8px 4px; border: none; background: transparent;
+    color: #475569; font-family: 'Inter', sans-serif; font-size: 11px; font-weight: 600;
+    cursor: pointer; border-radius: 6px 6px 0 0; letter-spacing: 0.5px; text-transform: uppercase;
+    transition: all .2s; position: relative;
 }
-
-.btn-primary {
-    background: linear-gradient(90deg, #8b5cf6, #3b82f6);
-    color: white;
-    font-weight: 500;
-    box-shadow: 0 0 20px rgba(139, 92, 246, 0.4);
+.tab-btn:hover { color: #94a3b8; background: rgba(255,255,255,0.04); }
+.tab-btn.active { color: #a78bfa; }
+.tab-btn.active::after {
+    content: ''; position: absolute; bottom: -1px; left: 8px; right: 8px; height: 2px;
+    background: linear-gradient(90deg, #8b5cf6, #22d3ee);
+    border-radius: 2px 2px 0 0;
+    box-shadow: 0 0 10px rgba(139,92,246,.6);
 }
+.tab-icon { font-size: 13px; display: block; margin-bottom: 1px; }
 
-.btn-primary:hover {
-    box-shadow: 0 0 30px rgba(139, 92, 246, 0.7);
-    transform: scale(1.02);
+/* ── Content Area ── */
+.tab-content {
+    flex: 1; overflow-y: auto; overflow-x: hidden;
+    padding: 16px 18px;
+    scrollbar-width: thin; scrollbar-color: rgba(139,92,246,.3) transparent;
 }
+.tab-content::-webkit-scrollbar { width: 4px; }
+.tab-content::-webkit-scrollbar-track { background: transparent; }
+.tab-content::-webkit-scrollbar-thumb { background: rgba(139,92,246,.3); border-radius: 2px; }
 
-.btn-secondary {
-    background: transparent;
-    color: #64748b;
-}
+.hidden { display: none !important; }
 
-.btn-secondary:hover {
-    color: #cbd5e1;
-}
-
-.hidden {
-    display: none !important;
-}
-
-.protection-center, .detailed-analysis, .block-confirm {
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-    animation: fadeIn 0.3s ease;
-}
-
-@keyframes fadeIn {
-    from { opacity: 0; transform: translateY(10px); }
+/* ── Animations ── */
+@keyframes fadeInUp {
+    from { opacity: 0; transform: translateY(8px); }
     to { opacity: 1; transform: translateY(0); }
 }
-
-.pc-title {
-    font-size: 15px;
-    font-weight: 600;
-    color: #e2e8f0;
-    text-align: center;
-    margin-bottom: 0px;
-    border-bottom: 1px solid rgba(255,255,255,0.1);
-    padding-bottom: 8px;
+@keyframes pulse-ring {
+    0%,100% { box-shadow: 0 0 0 0 rgba(139,92,246,.4); }
+    50% { box-shadow: 0 0 0 8px rgba(139,92,246,0); }
+}
+@keyframes typing-dot {
+    0%,80%,100% { transform: translateY(0); opacity:.4; }
+    40% { transform: translateY(-4px); opacity:1; }
+}
+@keyframes borderGlow {
+    0% { box-shadow: 0 0 12px rgba(168,85,247,.2); }
+    100% { box-shadow: 0 0 28px rgba(34,211,238,.35); }
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes scoreCountUp {
+    from { opacity:0; transform: scale(.8); }
+    to { opacity:1; transform: scale(1); }
+}
+@keyframes drawRing {
+    from { stroke-dashoffset: 264; }
+    to { stroke-dashoffset: var(--target-offset); }
 }
 
-.pc-risks {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 6px;
-    background: rgba(0,0,0,0.3);
-    padding: 10px;
-    border-radius: 8px;
+/* ═══════════════════════════════════════════════════
+   TAB 1 — SCAN
+═══════════════════════════════════════════════════ */
+.scan-panel { animation: fadeInUp .3s ease; }
+
+.domain-strip {
+    text-align: center; margin-bottom: 14px;
+    padding: 8px 12px; background: rgba(249,115,22,.08);
+    border: 1px solid rgba(249,115,22,.2); border-radius: 8px;
+}
+.domain-strip .domain-label { font-size: 10px; color: #64748b; text-transform: uppercase; letter-spacing: 1px; }
+.domain-strip .domain-val { font-size: 14px; font-weight: 600; color: #f97316; word-break: break-all; margin-top: 2px; }
+
+.score-row {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 14px;
 }
 
-.pc-risk-item {
-    font-size: 11px;
-    color: #cbd5e1;
-    display: flex;
-    justify-content: space-between;
+/* Ring */
+.ring-wrap { position: relative; width: 120px; height: 120px; flex-shrink: 0; }
+.ring-svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+.ring-bg { fill: none; stroke: rgba(255,255,255,0.06); stroke-width: 8; }
+.ring-fill {
+    fill: none; stroke-width: 8; stroke-linecap: round;
+    stroke-dasharray: 264;
+    stroke-dashoffset: 264;
+    transition: stroke-dashoffset 1.2s cubic-bezier(.4,0,.2,1), stroke .5s;
+}
+.ring-inner {
+    position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+}
+.ring-score { font-size: 30px; font-weight: 700; color: #fff; animation: scoreCountUp .5s ease; font-family: 'JetBrains Mono',monospace; }
+.ring-label { font-size: 10px; color: #64748b; letter-spacing: 1px; text-transform: uppercase; }
+
+/* Badge */
+.threat-badge {
+    display: inline-flex; align-items: center; justify-content: center;
+    padding: 5px 14px; border-radius: 20px; font-size: 10px; font-weight: 700;
+    letter-spacing: 1.5px; text-transform: uppercase; border: 1px solid; margin-top: 6px;
+}
+.badge-trusted { color:#10b981; border-color:rgba(16,185,129,.4); background:rgba(16,185,129,.1); box-shadow:0 0 12px rgba(16,185,129,.2); }
+.badge-safe { color:#06b6d4; border-color:rgba(6,182,212,.4); background:rgba(6,182,212,.1); box-shadow:0 0 12px rgba(6,182,212,.2); }
+.badge-suspicious { color:#f59e0b; border-color:rgba(245,158,11,.4); background:rgba(245,158,11,.1); box-shadow:0 0 12px rgba(245,158,11,.2); }
+.badge-dangerous { color:#f97316; border-color:rgba(249,115,22,.4); background:rgba(249,115,22,.1); box-shadow:0 0 12px rgba(249,115,22,.2); }
+.badge-critical { color:#ef4444; border-color:rgba(239,68,68,.4); background:rgba(239,68,68,.1); box-shadow:0 0 12px rgba(239,68,68,.2); animation: pulse-ring 2s infinite; }
+.badge-unknown { color:#64748b; border-color:rgba(100,116,139,.4); background:rgba(100,116,139,.1); }
+
+/* Exposure sphere */
+.exposure-col { text-align: center; }
+.sphere-wrap { position: relative; width: 76px; height: 76px; margin: 0 auto 6px; }
+.sphere {
+    width:100%;height:100%;border-radius:50%;
+    background: radial-gradient(circle at 35% 35%, rgba(253,186,116,.9) 0%, rgba(220,38,38,.8) 40%, rgba(69,10,10,.95) 100%);
+    box-shadow: inset -8px -8px 16px rgba(0,0,0,.6), inset 8px 8px 16px rgba(255,255,255,.3), 0 0 28px rgba(220,38,38,.4);
+    display:flex;align-items:center;justify-content:center;position:relative;overflow:hidden;
+}
+.sphere::after {
+    content:'';position:absolute;top:8%;left:15%;width:38%;height:38%;
+    background:radial-gradient(ellipse, rgba(255,255,255,.35) 0%, transparent 70%);
+    transform:rotate(-45deg);border-radius:50%;
+}
+.sphere-val { font-size:16px;font-weight:700;color:#fff;z-index:2;position:relative;font-family:'JetBrains Mono',monospace; }
+.sphere-lbl { font-size:10px;color:#64748b;letter-spacing:.5px; }
+
+/* Pills */
+.pills-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin-bottom: 14px;
+}
+.pill {
+    background: rgba(15,18,30,.8); border: 1px solid rgba(255,255,255,.08);
+    border-radius: 8px; padding: 9px 11px; font-size: 11px; color: #cbd5e1;
+    display: flex; justify-content: space-between; align-items: center;
+    transition: all .25s; cursor: default;
+}
+.pill:hover { background: rgba(255,255,255,.05); transform: translateY(-1px); }
+.pill-val { font-weight: 700; font-family: 'JetBrains Mono',monospace; font-size: 12px; }
+
+/* AI Card */
+.ai-card {
+    border-radius: 10px; padding: 2px;
+    background: linear-gradient(135deg, rgba(139,92,246,.7), rgba(34,211,238,.7));
+    margin-bottom: 14px;
+    animation: borderGlow 4s ease-in-out infinite alternate;
+}
+.ai-card-inner {
+    background: #080c14; border-radius: 8px; padding: 12px;
+    font-family: 'JetBrains Mono',monospace; font-size: 11px;
+    color: #c4b5fd; line-height: 1.6; white-space: pre-wrap; min-height: 54px;
+}
+.ai-label { font-size: 10px; color: #6d28d9; letter-spacing: 1px; text-transform: uppercase; margin-bottom: 5px; font-family:'Inter',sans-serif; }
+
+/* Scan action buttons */
+.scan-actions { display: flex; gap: 8px; }
+.btn-scan { flex:1; padding:9px 0; border-radius:8px; font-size:11px; font-weight:600; cursor:pointer; font-family:'Inter',sans-serif; border:none; transition:all .2s; text-align:center; }
+.btn-protect { background:linear-gradient(90deg,#8b5cf6,#3b82f6); color:#fff; box-shadow:0 0 16px rgba(139,92,246,.35); }
+.btn-protect:hover { box-shadow:0 0 24px rgba(139,92,246,.6); transform:translateY(-1px); }
+.btn-block { background:rgba(239,68,68,.12); border:1px solid rgba(239,68,68,.3); color:#fca5a5; }
+.btn-block:hover { background:rgba(239,68,68,.2); }
+.btn-copy { background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.1); color:#94a3b8; }
+.btn-copy:hover { background:rgba(255,255,255,.1); color:#e2e8f0; }
+
+/* Protection Center sub-view */
+.pc-view { animation: fadeInUp .3s ease; }
+.sub-title { font-size:13px;font-weight:600;color:#e2e8f0;border-bottom:1px solid rgba(255,255,255,.08);padding-bottom:8px;margin-bottom:12px; }
+.pc-risk-grid { display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:12px; }
+.pc-risk-item { background:rgba(0,0,0,.3);border-radius:6px;padding:8px 10px;font-size:11px;color:#94a3b8;display:flex;justify-content:space-between; }
+.pc-risk-val { font-weight:700;font-family:'JetBrains Mono',monospace; }
+.pc-recs { background:rgba(139,92,246,.08);border:1px solid rgba(139,92,246,.25);padding:10px 12px;border-radius:8px;font-size:11px;color:#c4b5fd;line-height:1.6;margin-bottom:12px; }
+.pc-btns { display:grid;grid-template-columns:1fr 1fr;gap:8px; }
+.btn-pc { background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);color:#e2e8f0;padding:8px;border-radius:6px;font-size:11px;cursor:pointer;transition:all .2s;font-family:'Inter',sans-serif; }
+.btn-pc:hover { background:rgba(255,255,255,.1); }
+.btn-pc.danger { background:rgba(239,68,68,.1);border-color:rgba(239,68,68,.3);color:#fca5a5; }
+.btn-pc.danger:hover { background:rgba(239,68,68,.2); }
+
+/* Block confirm */
+.bc-view { text-align:center;padding:20px 0;animation:fadeInUp .3s ease; }
+.bc-title { font-size:15px;color:#ef4444;font-weight:600;margin-bottom:8px; }
+.bc-sub { font-size:12px;color:#64748b;margin-bottom:24px; }
+.bc-btns { display:flex;gap:12px;justify-content:center; }
+.btn-ghost { background:transparent;border:1px solid rgba(255,255,255,.15);color:#94a3b8;padding:9px 22px;border-radius:8px;font-size:12px;cursor:pointer;font-family:'Inter',sans-serif;transition:all .2s; }
+.btn-ghost:hover { border-color:rgba(255,255,255,.3);color:#e2e8f0; }
+.btn-red { background:#ef4444;border:none;color:#fff;padding:9px 22px;border-radius:8px;font-size:12px;cursor:pointer;font-family:'Inter',sans-serif;transition:all .2s; }
+.btn-red:hover { background:#dc2626; }
+
+/* Detailed analysis */
+.da-view { animation:fadeInUp .3s ease; }
+.da-grid { display:grid;grid-template-columns:1fr 1fr;gap:6px;background:rgba(0,0,0,.3);padding:10px;border-radius:8px;font-size:11px;color:#94a3b8;margin-bottom:10px; }
+.section-label { font-size:11px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.8px;margin:8px 0 4px; }
+.reason-list { font-size:11px;color:#cbd5e1;padding-left:14px;margin:0 0 6px; }
+.reason-list li { margin-bottom:3px; }
+
+/* Loading spinner */
+.loading-row { display:flex;align-items:center;gap:10px;padding:20px;justify-content:center; }
+.spinner { width:20px;height:20px;border:2px solid rgba(139,92,246,.2);border-top-color:#8b5cf6;border-radius:50%;animation:spin .8s linear infinite; }
+.loading-text { font-size:13px;color:#64748b; }
+
+/* ═══════════════════════════════════════════════════
+   TAB 2 — PHISH
+═══════════════════════════════════════════════════ */
+.phish-panel h3, .apk-panel h3, .breach-panel h3, .chat-panel h3 {
+    font-size:14px;font-weight:600;color:#e2e8f0;margin-bottom:4px;
+}
+.tab-desc { font-size:11px;color:#64748b;margin-bottom:14px;line-height:1.5; }
+
+.sm-textarea, .sm-input {
+    width:100%; background:rgba(0,0,0,.4); border:1px solid rgba(255,255,255,.1);
+    border-radius:8px; color:#e2e8f0; font-family:'Inter',sans-serif; font-size:12px;
+    padding:10px 12px; resize:vertical; outline:none; transition:border-color .2s;
+}
+.sm-textarea { min-height:100px; line-height:1.5; }
+.sm-textarea:focus, .sm-input:focus { border-color:rgba(139,92,246,.5); }
+.sm-textarea::placeholder, .sm-input::placeholder { color:#334155; }
+
+.sm-label { font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:.8px;margin-bottom:5px;display:block; }
+
+.btn-analyze {
+    width:100%;padding:11px;border:none;border-radius:8px;
+    background:linear-gradient(90deg,#8b5cf6,#3b82f6);color:#fff;
+    font-size:12px;font-weight:700;cursor:pointer;font-family:'Inter',sans-serif;
+    margin-top:10px;transition:all .2s;letter-spacing:.5px;
+    box-shadow:0 0 16px rgba(139,92,246,.3);
+}
+.btn-analyze:hover { box-shadow:0 0 24px rgba(139,92,246,.6);transform:translateY(-1px); }
+.btn-analyze:disabled { opacity:.5;cursor:not-allowed;transform:none; }
+
+/* Result Cards */
+.result-card {
+    margin-top:14px;background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.07);
+    border-radius:10px;padding:14px;animation:fadeInUp .4s ease;
+}
+.result-header { display:flex;align-items:center;justify-content:space-between;margin-bottom:10px; }
+.result-title { font-size:12px;font-weight:600;color:#94a3b8;text-transform:uppercase;letter-spacing:.8px; }
+.prob-bar-wrap { margin-bottom:12px; }
+.prob-bar-label { display:flex;justify-content:space-between;font-size:11px;color:#94a3b8;margin-bottom:4px; }
+.prob-bar-label .prob-pct { font-weight:700;font-family:'JetBrains Mono',monospace; }
+.prob-bar-track { height:8px;background:rgba(255,255,255,.08);border-radius:4px;overflow:hidden; }
+.prob-bar-fill { height:100%;border-radius:4px;transition:width 1s cubic-bezier(.4,0,.2,1);width:0%; }
+
+.class-badge {
+    display:inline-flex;padding:4px 12px;border-radius:20px;font-size:10px;font-weight:700;
+    letter-spacing:1px;text-transform:uppercase;border:1px solid;
+}
+.class-phishing { color:#ef4444;border-color:rgba(239,68,68,.4);background:rgba(239,68,68,.1); }
+.class-suspicious { color:#f97316;border-color:rgba(249,115,22,.4);background:rgba(249,115,22,.1); }
+.class-low_risk { color:#f59e0b;border-color:rgba(245,158,11,.4);background:rgba(245,158,11,.1); }
+.class-safe { color:#10b981;border-color:rgba(16,185,129,.4);background:rgba(16,185,129,.1); }
+
+.indicators-list { list-style:none;padding:0;margin:8px 0; }
+.indicators-list li {
+    font-size:11px;color:#cbd5e1;padding:5px 10px;background:rgba(255,255,255,.04);
+    border-radius:5px;margin-bottom:3px;border-left:2px solid rgba(139,92,246,.4);
+}
+.eli12-box { background:rgba(139,92,246,.08);border:1px solid rgba(139,92,246,.2);border-radius:8px;padding:10px;font-size:11px;color:#c4b5fd;line-height:1.6;margin-top:8px; }
+.eli12-label { font-size:9px;color:#6d28d9;text-transform:uppercase;letter-spacing:1px;margin-bottom:4px; }
+
+/* ═══════════════════════════════════════════════════
+   TAB 3 — APK
+═══════════════════════════════════════════════════ */
+.input-group { margin-bottom:10px; }
+.risk-gauge-wrap { text-align:center;padding:10px 0; }
+.risk-num {
+    font-size:42px;font-weight:700;font-family:'JetBrains Mono',monospace;
+    background:linear-gradient(135deg,#ef4444,#f97316);-webkit-background-clip:text;-webkit-text-fill-color:transparent;
+}
+.risk-level-badge { margin-top:4px; }
+
+.perm-list { list-style:none;padding:0;margin:6px 0; }
+.perm-item {
+    display:flex;align-items:flex-start;gap:8px;padding:7px 10px;border-radius:6px;margin-bottom:4px;
+    font-size:11px;line-height:1.4;
+}
+.perm-item.danger { background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.2);color:#fca5a5; }
+.perm-item.safe { background:rgba(16,185,129,.06);border:1px solid rgba(16,185,129,.15);color:#6ee7b7; }
+.perm-item .perm-icon { font-size:12px;flex-shrink:0;margin-top:1px; }
+.perm-name { font-weight:600;font-family:'JetBrains Mono',monospace;font-size:10px; }
+.perm-reason { color:#64748b;font-size:10px; }
+
+.combo-flag {
+    padding:8px 11px;background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.25);
+    border-radius:7px;font-size:11px;color:#fca5a5;margin-bottom:4px;line-height:1.4;
 }
 
-.pc-risk-val {
-    font-weight: 600;
+/* ═══════════════════════════════════════════════════
+   TAB 4 — BREACH
+═══════════════════════════════════════════════════ */
+.breach-clean {
+    text-align:center;padding:24px 0;animation:fadeInUp .4s ease;
+}
+.breach-clean-icon { font-size:48px;margin-bottom:10px; }
+.breach-clean-title { font-size:16px;font-weight:700;color:#10b981;margin-bottom:6px; }
+.breach-clean-sub { font-size:12px;color:#64748b;line-height:1.5; }
+
+.breach-item {
+    background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.07);border-radius:10px;
+    padding:12px 14px;margin-bottom:8px;animation:fadeInUp .4s ease;
+}
+.breach-item-header { display:flex;align-items:center;justify-content:space-between;margin-bottom:6px; }
+.breach-source { font-size:13px;font-weight:700;color:#e2e8f0; }
+.breach-date { font-size:10px;color:#64748b;font-family:'JetBrains Mono',monospace; }
+.breach-data { font-size:11px;color:#94a3b8;margin-bottom:6px; }
+.breach-data span { background:rgba(255,255,255,.06);padding:2px 7px;border-radius:4px;margin:2px 2px 0 0;display:inline-block;font-family:'JetBrains Mono',monospace;font-size:10px; }
+.breach-rec { font-size:11px;color:#c4b5fd;background:rgba(139,92,246,.1);border:1px solid rgba(139,92,246,.2);padding:7px 10px;border-radius:6px; }
+
+.sev-badge {
+    display:inline-flex;padding:2px 10px;border-radius:10px;font-size:9px;font-weight:700;
+    letter-spacing:1px;text-transform:uppercase;border:1px solid;
+}
+.sev-critical { color:#ef4444;border-color:rgba(239,68,68,.4);background:rgba(239,68,68,.12); }
+.sev-high { color:#f97316;border-color:rgba(249,115,22,.4);background:rgba(249,115,22,.1); }
+.sev-medium { color:#f59e0b;border-color:rgba(245,158,11,.4);background:rgba(245,158,11,.1); }
+.sev-low { color:#10b981;border-color:rgba(16,185,129,.4);background:rgba(16,185,129,.1); }
+
+.overall-rec {
+    padding:10px 14px;border-radius:8px;font-size:11px;line-height:1.6;margin-top:10px;
+    background:rgba(139,92,246,.1);border:1px solid rgba(139,92,246,.25);color:#c4b5fd;
 }
 
-.pc-recs {
-    background: rgba(139,92,246,0.1);
-    border: 1px solid rgba(139,92,246,0.3);
-    padding: 10px;
-    border-radius: 8px;
-    font-size: 11px;
-    color: #e2e8f0;
-    line-height: 1.5;
+/* ═══════════════════════════════════════════════════
+   TAB 5 — CHAT
+═══════════════════════════════════════════════════ */
+.chat-panel { display:flex;flex-direction:column;height:100%;padding:0 !important; }
+.chat-messages {
+    flex:1;overflow-y:auto;padding:14px 16px;
+    display:flex;flex-direction:column;gap:10px;
+    min-height:200px;max-height:380px;
+    scrollbar-width:thin;scrollbar-color:rgba(139,92,246,.3) transparent;
 }
+.chat-messages::-webkit-scrollbar { width:3px; }
+.chat-messages::-webkit-scrollbar-thumb { background:rgba(139,92,246,.3);border-radius:2px; }
+.chat-bubble {
+    max-width:85%;padding:9px 13px;border-radius:12px;font-size:12px;line-height:1.55;
+    animation:fadeInUp .25s ease;
+}
+.chat-bubble.user {
+    background:linear-gradient(135deg,rgba(139,92,246,.25),rgba(59,130,246,.2));
+    border:1px solid rgba(139,92,246,.3);color:#e2e8f0;align-self:flex-end;border-bottom-right-radius:4px;
+}
+.chat-bubble.ai {
+    background:rgba(15,18,30,.9);border:1px solid rgba(255,255,255,.08);color:#c4b5fd;
+    align-self:flex-start;border-bottom-left-radius:4px;
+}
+.chat-bubble.ai .bubble-name { font-size:9px;color:#6d28d9;text-transform:uppercase;letter-spacing:1px;margin-bottom:4px; }
 
-.pc-actions {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 8px;
-}
+.typing-indicator { display:flex;align-items:center;gap:3px;padding:10px 14px;align-self:flex-start; }
+.dot { width:6px;height:6px;border-radius:50%;background:#6d28d9; }
+.dot:nth-child(1) { animation:typing-dot 1.2s .0s infinite; }
+.dot:nth-child(2) { animation:typing-dot 1.2s .2s infinite; }
+.dot:nth-child(3) { animation:typing-dot 1.2s .4s infinite; }
 
-.btn-pc {
-    background: rgba(255,255,255,0.05);
-    border: 1px solid rgba(255,255,255,0.1);
-    color: #e2e8f0;
-    padding: 8px;
-    border-radius: 6px;
-    font-size: 11px;
-    cursor: pointer;
-    transition: all 0.2s;
-    font-family: 'Inter', sans-serif;
-    text-align: center;
+.chat-input-row {
+    display:flex;gap:8px;padding:10px 14px;border-top:1px solid rgba(255,255,255,.06);
+    background:rgba(0,0,0,.25);flex-shrink:0;
 }
-.btn-pc:hover {
-    background: rgba(255,255,255,0.1);
+.chat-input {
+    flex:1;background:rgba(0,0,0,.4);border:1px solid rgba(255,255,255,.1);
+    border-radius:8px;color:#e2e8f0;font-family:'Inter',sans-serif;font-size:12px;
+    padding:9px 12px;outline:none;transition:border-color .2s;
 }
-.btn-pc.danger {
-    background: rgba(239,68,68,0.1);
-    border-color: rgba(239,68,68,0.3);
-    color: #fca5a5;
+.chat-input:focus { border-color:rgba(139,92,246,.5); }
+.chat-input::placeholder { color:#334155; }
+.btn-send {
+    width:38px;height:38px;border:none;border-radius:8px;
+    background:linear-gradient(135deg,#8b5cf6,#3b82f6);color:#fff;
+    cursor:pointer;font-size:16px;display:flex;align-items:center;justify-content:center;
+    transition:all .2s;box-shadow:0 0 12px rgba(139,92,246,.3);flex-shrink:0;
 }
-.btn-pc.danger:hover {
-    background: rgba(239,68,68,0.2);
-}
+.btn-send:hover { box-shadow:0 0 20px rgba(139,92,246,.6);transform:scale(1.05); }
+.btn-send:disabled { opacity:.4;cursor:not-allowed;transform:none; }
 
-.da-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 6px;
-    font-size: 11px;
-    color: #cbd5e1;
-    background: rgba(0,0,0,0.3);
-    padding: 10px;
-    border-radius: 8px;
-}
-
+/* Section divider */
+.divider { height:1px;background:rgba(255,255,255,.06);margin:10px 0; }
 </style>
 
 <div class="wrapper">
-    <div class="header">
-        <div class="title">SHADOWMAP AI</div>
-        <div class="logo">
-            <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" fill="url(#shield-grad)"/>
-                <defs>
-                    <linearGradient id="shield-grad" x1="0%" y1="0%" x2="100%" y2="100%">
-                        <stop offset="0%" stop-color="#a78bfa" />
-                        <stop offset="100%" stop-color="#3b82f6" />
-                    </linearGradient>
-                </defs>
-            </svg>
-        </div>
+  <!-- Header -->
+  <div class="sm-header">
+    <div class="sm-logo">
+      <div class="sm-logo-icon">🛡</div>
+      <div>
+        <div class="sm-logo-text">ShadowMap AI</div>
+        <div class="sm-logo-sub">CYBERSECURITY COCKPIT</div>
+      </div>
+    </div>
+    <button id="sm-close-btn" class="sm-close">✕</button>
+  </div>
+
+  <!-- Tab Bar -->
+  <div class="tab-bar">
+    <button id="tab-btn-scan" class="tab-btn active">
+      <span class="tab-icon">🔍</span>SCAN
+    </button>
+    <button id="tab-btn-phish" class="tab-btn">
+      <span class="tab-icon">🎣</span>PHISH
+    </button>
+    <button id="tab-btn-apk" class="tab-btn">
+      <span class="tab-icon">📱</span>APK
+    </button>
+    <button id="tab-btn-breach" class="tab-btn">
+      <span class="tab-icon">🔓</span>BREACH
+    </button>
+    <button id="tab-btn-chat" class="tab-btn">
+      <span class="tab-icon">💬</span>CHAT
+    </button>
+  </div>
+
+  <!-- ═══════════════════════════════════════
+       TAB 1 — SCAN
+  ═══════════════════════════════════════ -->
+  <div id="tab-panel-scan" class="tab-content scan-panel">
+    <!-- Domain strip -->
+    <div class="domain-strip">
+      <div class="domain-label">Analyzing</div>
+      <div id="sm-domain" class="domain-val">Loading...</div>
     </div>
 
-    <div class="domain-container">
-        <div id="sm-domain" class="domain">${window.location.hostname || "Unknown"}</div>
+    <!-- Score row: ring + exposure sphere -->
+    <div class="score-row">
+      <div style="display:flex;flex-direction:column;align-items:center;gap:6px;">
+        <div class="ring-wrap">
+          <svg class="ring-svg" viewBox="0 0 100 100">
+            <circle class="ring-bg" cx="50" cy="50" r="42"/>
+            <circle id="sm-ring-circle" class="ring-fill" cx="50" cy="50" r="42"/>
+            <defs>
+              <linearGradient id="ring-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop id="ring-stop-1" offset="0%" stop-color="#ef4444"/>
+                <stop id="ring-stop-2" offset="100%" stop-color="#f97316"/>
+              </linearGradient>
+            </defs>
+          </svg>
+          <div class="ring-inner">
+            <div id="sm-score" class="ring-score">0</div>
+            <div class="ring-label">ShadowScore</div>
+          </div>
+        </div>
+        <div id="sm-badge" class="threat-badge badge-unknown">UNKNOWN</div>
+      </div>
+
+      <div class="exposure-col">
+        <div class="sphere-wrap">
+          <div id="sm-sphere" class="sphere">
+            <div id="sm-exposure" class="sphere-val">0%</div>
+          </div>
+        </div>
+        <div class="sphere-lbl">Critical Exposure</div>
+      </div>
     </div>
 
-    <!-- MAIN DASHBOARD VIEW -->
-    <div id="dashboard-view">
-        <div class="dashboard-row">
-            <div class="score-column">
-                <div class="score-ring-container">
-                    <svg viewBox="0 0 100 100" class="ring-svg">
-                        <circle cx="50" cy="50" r="42" fill="none" stroke="#2a1a1a" stroke-width="8" />
-                        <circle id="sm-ring-circle" cx="50" cy="50" r="42" fill="none" stroke="url(#ring-grad)" stroke-width="8" stroke-dasharray="210 264" stroke-linecap="round" />
-                        <defs>
-                            <linearGradient id="ring-grad" x1="0%" y1="0%" x2="100%" y2="100%">
-                                <stop id="ring-stop-1" offset="0%" stop-color="#ef4444" />
-                                <stop id="ring-stop-2" offset="100%" stop-color="#f97316" />
-                            </linearGradient>
-                        </defs>
-                    </svg>
-                    <div class="score-content">
-                        <div id="sm-score" class="score">0</div>
-                        <div class="scoreLabel">ShadowScore</div>
-                    </div>
-                </div>
-                <div id="sm-badge" class="badge badge-danger">UNKNOWN</div>
-            </div>
-
-            <div class="exposure-container">
-                <div class="sphere-container">
-                    <div id="sm-sphere" class="sphere">
-                        <div id="sm-exposure" class="exposure-value">0%</div>
-                    </div>
-                </div>
-                <div class="exposure-label">Critical Exposure</div>
-            </div>
-        </div>
-
-        <div class="pills-grid">
-            <div id="pill-phishing" class="pill">
-                <span>Phishing</span>
-                <span id="sm-phishing-val" class="pill-icon">--%</span>
-            </div>
-            <div id="pill-spoof" class="pill">
-                <span>Domain Spoof</span>
-                <span id="sm-spoof-val" class="pill-icon">--%</span>
-            </div>
-            <div id="pill-cred" class="pill">
-                <span>Credential Risk</span>
-                <span id="sm-cred-val" class="pill-icon">--%</span>
-            </div>
-            <div id="pill-redirect" class="pill">
-                <span>Malicious Redirect</span>
-                <span id="sm-redirect-val" class="pill-icon">--%</span>
-            </div>
-        </div>
-
-        <div class="ai-card">
-            <div id="sm-ai-explanation" class="ai-card-inner">Analyzing website...</div>
-        </div>
-
-        <div class="actions">
-            <button id="sm-protect-btn" class="btn-primary">Protect Me Now</button>
-            <button id="sm-ignore-btn" class="btn-secondary">Ignore</button>
-        </div>
+    <!-- 4 Metric Pills -->
+    <div class="pills-grid">
+      <div id="pill-phishing" class="pill">
+        <span>🎣 Phishing</span>
+        <span id="sm-phishing-val" class="pill-val">--%</span>
+      </div>
+      <div id="pill-spoof" class="pill">
+        <span>🎭 Domain Spoof</span>
+        <span id="sm-spoof-val" class="pill-val">--%</span>
+      </div>
+      <div id="pill-cred" class="pill">
+        <span>🔑 Credential</span>
+        <span id="sm-cred-val" class="pill-val">--%</span>
+      </div>
+      <div id="pill-redirect" class="pill">
+        <span>↪ Redirect</span>
+        <span id="sm-redirect-val" class="pill-val">--%</span>
+      </div>
     </div>
 
-    <!-- PROTECTION CENTER VIEW -->
-    <div id="protection-center-view" class="protection-center hidden">
-        <div class="pc-title">ShadowMap Protection Center</div>
-        <div class="pc-risks">
-            <div class="pc-risk-item"><span>Phishing:</span> <span id="pc-phish-val" class="pc-risk-val">0%</span></div>
-            <div class="pc-risk-item"><span>Spoofing:</span> <span id="pc-spoof-val" class="pc-risk-val">0%</span></div>
-            <div class="pc-risk-item"><span>Credential:</span> <span id="pc-cred-val" class="pc-risk-val">0%</span></div>
-            <div class="pc-risk-item"><span>Redirect:</span> <span id="pc-redirect-val" class="pc-risk-val">0%</span></div>
-        </div>
-        <div id="pc-recs" class="pc-recs">Generating recommendations...</div>
-        <div class="pc-actions">
-            <button id="pc-btn-copy" class="btn-pc">Copy Report</button>
-            <button id="pc-btn-analysis" class="btn-pc">Detailed Analysis</button>
-            <button id="pc-btn-block" class="btn-pc danger">Block Site</button>
-            <button id="pc-btn-close" class="btn-pc">Close</button>
-        </div>
+    <!-- AI Explanation Card -->
+    <div class="ai-card">
+      <div class="ai-card-inner">
+        <div class="ai-label">⚡ Shadow AI Analysis</div>
+        <div id="sm-ai-explanation">Analyzing website security posture...</div>
+      </div>
     </div>
 
-    <!-- BLOCK CONFIRMATION VIEW -->
-    <div id="block-confirm-view" class="block-confirm hidden" style="text-align:center;">
-        <h2 style="color:#ef4444;font-size:16px;margin:20px 0;">Block this website in ShadowMap?</h2>
-        <div class="actions" style="margin-top:20px;">
-            <button id="bc-btn-cancel" class="btn-secondary">Cancel</button>
-            <button id="bc-btn-confirm" class="btn-primary" style="background:#ef4444;">Block Site</button>
-        </div>
+    <!-- Action Buttons (main dashboard) -->
+    <div id="scan-main-actions" class="scan-actions">
+      <button id="sm-protect-btn" class="btn-scan btn-protect">🛡 Protect Me</button>
+      <button id="sm-block-btn" class="btn-scan btn-block">🚫 Block Site</button>
+      <button id="sm-copy-btn" class="btn-scan btn-copy">📋 Copy</button>
     </div>
 
-    <!-- DETAILED ANALYSIS VIEW -->
-    <div id="detailed-analysis-view" class="detailed-analysis hidden">
-        <div class="pc-title">Detailed Analysis</div>
-        <div class="da-grid">
-            <div>Domain: <span id="da-domain" style="color:#f97316;"></span></div>
-            <div>Threat Level: <span id="da-threat" style="font-weight:bold;"></span></div>
-            <div>ShadowScore: <span id="da-shadow"></span></div>
-            <div>Trust Score: <span id="da-trust"></span></div>
-            <div>Risk Score: <span id="da-risk"></span></div>
-            <div>Exposure Score: <span id="da-exposure"></span></div>
-        </div>
-        
-        <div style="font-size:12px;font-weight:600;margin-top:2px;">Reasons:</div>
-        <ul id="da-reasons" style="font-size:11px;color:#cbd5e1;padding-left:16px;margin:0;"></ul>
-        
-        <div style="font-size:12px;font-weight:600;margin-top:2px;">Recommended Actions:</div>
-        <ul id="da-actions" style="font-size:11px;color:#cbd5e1;padding-left:16px;margin:0;"></ul>
-        
-        <div style="font-size:12px;font-weight:600;margin-top:2px;">Security Breakdown:</div>
-        <div id="da-breakdown" style="display:flex;flex-direction:column;gap:4px;"></div>
-        
-        <button id="da-btn-back" class="btn-secondary" style="width:100%;border:1px solid rgba(255,255,255,0.1);margin-top:5px;">Back</button>
+    <!-- Protection Center sub-view -->
+    <div id="protection-center-view" class="pc-view hidden" style="margin-top:12px;">
+      <div class="sub-title">🛡 Protection Center</div>
+      <div class="pc-risk-grid">
+        <div class="pc-risk-item"><span>Phishing:</span><span id="pc-phish-val" class="pc-risk-val">0%</span></div>
+        <div class="pc-risk-item"><span>Spoofing:</span><span id="pc-spoof-val" class="pc-risk-val">0%</span></div>
+        <div class="pc-risk-item"><span>Credential:</span><span id="pc-cred-val" class="pc-risk-val">0%</span></div>
+        <div class="pc-risk-item"><span>Redirect:</span><span id="pc-redirect-val" class="pc-risk-val">0%</span></div>
+      </div>
+      <div id="pc-recs" class="pc-recs">Generating recommendations...</div>
+      <div class="pc-btns">
+        <button id="pc-btn-copy" class="btn-pc">Copy Report</button>
+        <button id="pc-btn-analysis" class="btn-pc">Analysis ›</button>
+        <button id="pc-btn-block" class="btn-pc danger">Block Site</button>
+        <button id="pc-btn-close" class="btn-pc">← Back</button>
+      </div>
     </div>
 
-    <div id="sm-progress-fill" class="hidden"></div>
+    <!-- Block Confirm sub-view -->
+    <div id="block-confirm-view" class="hidden" style="margin-top:12px;">
+      <div class="bc-view">
+        <div class="bc-title">🚫 Block this website?</div>
+        <div class="bc-sub">ShadowMap will prevent future access to this domain.</div>
+        <div class="bc-btns">
+          <button id="bc-btn-cancel" class="btn-ghost">Cancel</button>
+          <button id="bc-btn-confirm" class="btn-red">Block Site</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Detailed Analysis sub-view -->
+    <div id="detailed-analysis-view" class="da-view hidden" style="margin-top:12px;">
+      <div class="sub-title">📊 Detailed Analysis</div>
+      <div class="da-grid">
+        <div>Domain: <span id="da-domain" style="color:#f97316;"></span></div>
+        <div>Threat: <span id="da-threat" style="font-weight:700;"></span></div>
+        <div>ShadowScore: <span id="da-shadow" style="color:#a78bfa;font-family:'JetBrains Mono',monospace;"></span></div>
+        <div>Trust Score: <span id="da-trust"></span></div>
+        <div>Risk Score: <span id="da-risk"></span></div>
+        <div>Exposure: <span id="da-exposure"></span></div>
+      </div>
+      <div class="section-label">Detected Reasons</div>
+      <ul id="da-reasons" class="reason-list"></ul>
+      <div class="section-label">Recommended Actions</div>
+      <ul id="da-actions" class="reason-list"></ul>
+      <div class="section-label">Risk Breakdown</div>
+      <div id="da-breakdown"></div>
+      <button id="da-btn-back" class="btn-pc" style="width:100%;margin-top:10px;">← Back</button>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════
+       TAB 2 — PHISH
+  ═══════════════════════════════════════ -->
+  <div id="tab-panel-phish" class="tab-content hidden">
+    <div class="phish-panel">
+      <h3>PhishGuard AI</h3>
+      <p class="tab-desc">Paste a suspicious email or SMS. Shadow AI will analyze it for phishing indicators in seconds.</p>
+      <label class="sm-label">Email / SMS text</label>
+      <textarea id="phish-textarea" class="sm-textarea" placeholder="Paste email or SMS text here...&#10;&#10;e.g. &quot;Your account has been suspended! Verify now at http://...&quot;"></textarea>
+      <button id="phish-analyze-btn" class="btn-analyze">⚡ Analyze for Phishing</button>
+      <div id="phish-result"></div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════
+       TAB 3 — APK
+  ═══════════════════════════════════════ -->
+  <div id="tab-panel-apk" class="tab-content hidden">
+    <div class="apk-panel">
+      <h3>APK Shield AI</h3>
+      <p class="tab-desc">Enter an Android app name and its requested permissions. Shadow AI will flag dangerous combos and spyware patterns.</p>
+      <div class="input-group">
+        <label class="sm-label">App Name</label>
+        <input id="apk-name-input" class="sm-input" type="text" placeholder="e.g. Super Calculator, Flashlight Pro"/>
+      </div>
+      <div class="input-group">
+        <label class="sm-label">Permissions (comma-separated)</label>
+        <textarea id="apk-perms-textarea" class="sm-textarea" style="min-height:80px;" placeholder="e.g. READ_SMS, RECORD_AUDIO, ACCESS_FINE_LOCATION, CAMERA, READ_CONTACTS"></textarea>
+      </div>
+      <button id="apk-scan-btn" class="btn-analyze">🔍 Scan APK Permissions</button>
+      <div id="apk-result"></div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════
+       TAB 4 — BREACH
+  ═══════════════════════════════════════ -->
+  <div id="tab-panel-breach" class="tab-content hidden">
+    <div class="breach-panel">
+      <h3>Breach Radar</h3>
+      <p class="tab-desc">Check if your email has been exposed in known data breaches. Try <strong style="color:#a78bfa">test@example.com</strong> for a demo.</p>
+      <label class="sm-label">Email Address</label>
+      <input id="breach-email-input" class="sm-input" type="email" placeholder="your@email.com"/>
+      <button id="breach-check-btn" class="btn-analyze">🔓 Check Breaches</button>
+      <div id="breach-result"></div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════
+       TAB 5 — CHAT
+  ═══════════════════════════════════════ -->
+  <div id="tab-panel-chat" class="tab-content chat-panel" style="padding:0;">
+    <div id="chat-messages" class="chat-messages">
+      <!-- Initial message inserted by JS -->
+    </div>
+    <div class="chat-input-row">
+      <input id="chat-input" class="chat-input" type="text" placeholder="Ask Shadow AI anything..."/>
+      <button id="chat-send-btn" class="btn-send">↑</button>
+    </div>
+  </div>
 </div>
 `;
+
     shadow.appendChild(container);
     window.currentScanData = null;
 
-    // EVENT LISTENERS
-    shadow.getElementById("sm-protect-btn").addEventListener("click", () => {
-        shadow.getElementById("dashboard-view").classList.add("hidden");
-        shadow.getElementById("protection-center-view").classList.remove("hidden");
-        const data = window.currentScanData || {};
-        shadow.getElementById("pc-phish-val").textContent = (data.phishing_probability || 0) + "%";
-        shadow.getElementById("pc-spoof-val").textContent = (data.domain_spoof_probability || 0) + "%";
-        shadow.getElementById("pc-cred-val").textContent = (data.credential_risk || 0) + "%";
-        shadow.getElementById("pc-redirect-val").textContent = (data.redirect_risk || 0) + "%";
-        updateProtectionCenter(data);
+    // ──────────────────────────────────────────────────
+    // TAB BAR LISTENERS
+    // ──────────────────────────────────────────────────
+    ['scan','phish','apk','breach','chat'].forEach(t => {
+        shadow.getElementById(`tab-btn-${t}`).addEventListener('click', () => switchTabInShadow(shadow, t));
     });
 
-    shadow.getElementById("pc-btn-close").addEventListener("click", () => {
-        shadow.getElementById("protection-center-view").classList.add("hidden");
-        shadow.getElementById("dashboard-view").classList.remove("hidden");
+    function switchTabInShadow(shadow, tabName) {
+        ['scan','phish','apk','breach','chat'].forEach(t => {
+            shadow.getElementById(`tab-btn-${t}`).classList.toggle('active', t === tabName);
+            shadow.getElementById(`tab-panel-${t}`).classList.toggle('hidden', t !== tabName);
+        });
+        if (tabName === 'chat') {
+            const msgs = shadow.getElementById('chat-messages');
+            if (msgs) setTimeout(() => msgs.scrollTop = msgs.scrollHeight, 50);
+        }
+    }
+
+    // ──────────────────────────────────────────────────
+    // CLOSE BUTTON
+    // ──────────────────────────────────────────────────
+    shadow.getElementById('sm-close-btn').addEventListener('click', () => {
+        document.getElementById('shadowmap-overlay-root').style.display = 'none';
+        overlayActive = false;
     });
-    
-    shadow.getElementById("pc-btn-copy").addEventListener("click", copySecurityReport);
-    
-    shadow.getElementById("pc-btn-analysis").addEventListener("click", renderDetailedAnalysis);
-    
-    shadow.getElementById("pc-btn-block").addEventListener("click", () => {
-        shadow.getElementById("protection-center-view").classList.add("hidden");
-        shadow.getElementById("block-confirm-view").classList.remove("hidden");
+
+    // ──────────────────────────────────────────────────
+    // SCAN TAB — sub-view navigation
+    // ──────────────────────────────────────────────────
+    function showScanSubview(name) {
+        ['scan-main-actions','protection-center-view','block-confirm-view','detailed-analysis-view'].forEach(id => {
+            shadow.getElementById(id)?.classList.add('hidden');
+        });
+        if (name) shadow.getElementById(name)?.classList.remove('hidden');
+    }
+
+    shadow.getElementById('sm-protect-btn').addEventListener('click', () => {
+        showScanSubview('protection-center-view');
+        const data = window.currentScanData || {};
+        shadow.getElementById('pc-phish-val').textContent = (data.phishing_probability || 0) + '%';
+        shadow.getElementById('pc-spoof-val').textContent = (data.domain_spoof_probability || 0) + '%';
+        shadow.getElementById('pc-cred-val').textContent = (data.credential_risk || 0) + '%';
+        shadow.getElementById('pc-redirect-val').textContent = (data.redirect_risk || 0) + '%';
+        updateProtCenter(shadow, data);
     });
-    
-    shadow.getElementById("bc-btn-cancel").addEventListener("click", () => {
-        shadow.getElementById("block-confirm-view").classList.add("hidden");
-        shadow.getElementById("protection-center-view").classList.remove("hidden");
+
+    shadow.getElementById('sm-block-btn').addEventListener('click', () => showScanSubview('block-confirm-view'));
+    shadow.getElementById('sm-copy-btn').addEventListener('click', copySecurityReport);
+
+    shadow.getElementById('pc-btn-close').addEventListener('click', () => showScanSubview('scan-main-actions'));
+    shadow.getElementById('pc-btn-copy').addEventListener('click', copySecurityReport);
+    shadow.getElementById('pc-btn-block').addEventListener('click', () => showScanSubview('block-confirm-view'));
+    shadow.getElementById('pc-btn-analysis').addEventListener('click', () => {
+        showScanSubview('detailed-analysis-view');
+        renderDetailedAnalysis(shadow);
     });
-    
-    shadow.getElementById("bc-btn-confirm").addEventListener("click", blockCurrentSite);
-    
-    shadow.getElementById("da-btn-back").addEventListener("click", () => {
-        shadow.getElementById("detailed-analysis-view").classList.add("hidden");
-        shadow.getElementById("protection-center-view").classList.remove("hidden");
+    shadow.getElementById('bc-btn-cancel').addEventListener('click', () => showScanSubview('scan-main-actions'));
+    shadow.getElementById('bc-btn-confirm').addEventListener('click', blockCurrentSite);
+    shadow.getElementById('da-btn-back').addEventListener('click', () => showScanSubview('protection-center-view'));
+
+    // ──────────────────────────────────────────────────
+    // TAB 2 — PHISHGUARD
+    // ──────────────────────────────────────────────────
+    shadow.getElementById('phish-analyze-btn').addEventListener('click', () => {
+        const text = shadow.getElementById('phish-textarea').value.trim();
+        if (!text) { highlightEmpty(shadow.getElementById('phish-textarea')); return; }
+        const btn = shadow.getElementById('phish-analyze-btn');
+        const resultEl = shadow.getElementById('phish-result');
+        btn.disabled = true; btn.textContent = '⏳ Analyzing...';
+        resultEl.innerHTML = loadingHTML('PhishGuard AI scanning...');
+
+        fetch(`${BACKEND}/api/phishguard`, {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({text})
+        })
+        .then(r => r.json())
+        .then(data => {
+            btn.disabled = false; btn.textContent = '⚡ Analyze for Phishing';
+            if (data.status === 'success') renderPhishResult(shadow, data.result);
+            else resultEl.innerHTML = errorHTML('Analysis failed. Is the backend running?');
+        })
+        .catch(e => {
+            btn.disabled = false; btn.textContent = '⚡ Analyze for Phishing';
+            resultEl.innerHTML = errorHTML('Cannot reach backend. Start the Flask server.');
+        });
     });
-    
-    shadow.getElementById("sm-ignore-btn").addEventListener("click", toggleOverlay);
+
+    // ──────────────────────────────────────────────────
+    // TAB 3 — APK SHIELD
+    // ──────────────────────────────────────────────────
+    shadow.getElementById('apk-scan-btn').addEventListener('click', () => {
+        const appName = shadow.getElementById('apk-name-input').value.trim() || 'Unknown App';
+        const perms = shadow.getElementById('apk-perms-textarea').value.trim();
+        if (!perms) { highlightEmpty(shadow.getElementById('apk-perms-textarea')); return; }
+        const btn = shadow.getElementById('apk-scan-btn');
+        const resultEl = shadow.getElementById('apk-result');
+        btn.disabled = true; btn.textContent = '🔍 Scanning...';
+        resultEl.innerHTML = loadingHTML('APK Shield scanning permissions...');
+
+        fetch(`${BACKEND}/api/apkshield`, {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({app_name: appName, permissions: perms})
+        })
+        .then(r => r.json())
+        .then(data => {
+            btn.disabled = false; btn.textContent = '🔍 Scan APK Permissions';
+            if (data.status === 'success') renderApkResult(shadow, data.result);
+            else resultEl.innerHTML = errorHTML('Scan failed. Is the backend running?');
+        })
+        .catch(() => {
+            btn.disabled = false; btn.textContent = '🔍 Scan APK Permissions';
+            resultEl.innerHTML = errorHTML('Cannot reach backend. Start the Flask server.');
+        });
+    });
+
+    // ──────────────────────────────────────────────────
+    // TAB 4 — BREACH RADAR
+    // ──────────────────────────────────────────────────
+    shadow.getElementById('breach-check-btn').addEventListener('click', () => {
+        const email = shadow.getElementById('breach-email-input').value.trim();
+        if (!email || !email.includes('@')) { highlightEmpty(shadow.getElementById('breach-email-input')); return; }
+        const btn = shadow.getElementById('breach-check-btn');
+        const resultEl = shadow.getElementById('breach-result');
+        btn.disabled = true; btn.textContent = '⏳ Checking...';
+        resultEl.innerHTML = loadingHTML('Scanning breach database...');
+
+        fetch(`${BACKEND}/api/breach`, {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({email})
+        })
+        .then(r => r.json())
+        .then(data => {
+            btn.disabled = false; btn.textContent = '🔓 Check Breaches';
+            if (data.status === 'success') renderBreachResult(shadow, data.result);
+            else resultEl.innerHTML = errorHTML('Check failed. Is the backend running?');
+        })
+        .catch(() => {
+            btn.disabled = false; btn.textContent = '🔓 Check Breaches';
+            resultEl.innerHTML = errorHTML('Cannot reach backend. Start the Flask server.');
+        });
+    });
+
+    shadow.getElementById('breach-email-input').addEventListener('keydown', e => {
+        if (e.key === 'Enter') shadow.getElementById('breach-check-btn').click();
+    });
+
+    // ──────────────────────────────────────────────────
+    // TAB 5 — SHADOW CHAT
+    // ──────────────────────────────────────────────────
+    const chatMessages = shadow.getElementById('chat-messages');
+
+    // Seed first AI message
+    appendChatBubble(chatMessages, 'ai', "Hi! I'm Shadow 👋 — your AI cybersecurity copilot. Ask me about any threat, phishing scam, data breach, or suspicious website. I'm here to help!");
+
+    function sendChatMessage() {
+        const input = shadow.getElementById('chat-input');
+        const msg = input.value.trim();
+        if (!msg) return;
+        input.value = '';
+
+        appendChatBubble(chatMessages, 'user', msg);
+        window.chatHistory.push({role: 'user', content: msg});
+
+        const sendBtn = shadow.getElementById('chat-send-btn');
+        sendBtn.disabled = true;
+
+        // Typing indicator
+        const typingEl = document.createElement('div');
+        typingEl.className = 'typing-indicator';
+        typingEl.innerHTML = '<div class="dot"></div><div class="dot"></div><div class="dot"></div>';
+        chatMessages.appendChild(typingEl);
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+
+        fetch(`${BACKEND}/api/chat`, {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({
+                message: msg,
+                context: window.currentScanData || {},
+                history: window.chatHistory.slice(-10)
+            })
+        })
+        .then(r => r.json())
+        .then(data => {
+            chatMessages.removeChild(typingEl);
+            sendBtn.disabled = false;
+            const reply = data.reply || "Sorry, I couldn't get a response. Try again.";
+            appendChatBubble(chatMessages, 'ai', reply);
+            window.chatHistory.push({role: 'ai', content: reply});
+        })
+        .catch(() => {
+            chatMessages.removeChild(typingEl);
+            sendBtn.disabled = false;
+            appendChatBubble(chatMessages, 'ai', "⚠️ Can't reach backend. Make sure Flask is running on port 5000.");
+        });
+    }
+
+    shadow.getElementById('chat-send-btn').addEventListener('click', sendChatMessage);
+    shadow.getElementById('chat-input').addEventListener('keydown', e => { if (e.key === 'Enter') sendChatMessage(); });
 
     document.body.appendChild(root);
 }
 
-// =========================
-// UPDATE UI
-// =========================
+// =============================================================================
+// RENDER HELPERS
+// =============================================================================
 
-function updateOverlayUI(data) {
+function loadingHTML(text) {
+    return `<div class="loading-row"><div class="spinner"></div><span class="loading-text">${text}</span></div>`;
+}
+
+function errorHTML(text) {
+    return `<div class="result-card" style="border-color:rgba(239,68,68,.3);"><div style="color:#fca5a5;font-size:12px;">⚠️ ${text}</div></div>`;
+}
+
+function highlightEmpty(el) {
+    el.style.borderColor = 'rgba(239,68,68,.6)';
+    el.focus();
+    setTimeout(() => el.style.borderColor = '', 1500);
+}
+
+function appendChatBubble(container, role, text) {
+    const bubble = document.createElement('div');
+    bubble.className = `chat-bubble ${role}`;
+    if (role === 'ai') {
+        bubble.innerHTML = `<div class="bubble-name">Shadow AI</div>${escapeHTML(text)}`;
+    } else {
+        bubble.textContent = text;
+    }
+    container.appendChild(bubble);
+    container.scrollTop = container.scrollHeight;
+}
+
+function escapeHTML(str) {
+    return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>');
+}
+
+function probabilityColor(v) {
+    if (v >= 70) return '#ef4444';
+    if (v >= 40) return '#f97316';
+    if (v >= 15) return '#f59e0b';
+    return '#10b981';
+}
+
+// ── Render Phish Result ──
+function renderPhishResult(shadow, r) {
+    const el = shadow.getElementById('phish-result');
+    const prob = r.phishing_probability || 0;
+    const cls = (r.classification || 'SAFE').toLowerCase().replace('_','_');
+    const clsMap = { phishing:'class-phishing', suspicious:'class-suspicious', low_risk:'class-low_risk', safe:'class-safe' };
+    const indicators = (r.indicators || []).map(i => `<li>${escapeHTML(String(i))}</li>`).join('');
+    el.innerHTML = `
+    <div class="result-card">
+      <div class="result-header">
+        <span class="result-title">PhishGuard Analysis</span>
+        <span class="class-badge ${clsMap[cls] || 'class-safe'}">${r.classification || 'SAFE'}</span>
+      </div>
+      <div class="prob-bar-wrap">
+        <div class="prob-bar-label">
+          <span>Phishing Probability</span>
+          <span class="prob-pct" style="color:${probabilityColor(prob)}">${prob}%</span>
+        </div>
+        <div class="prob-bar-track">
+          <div id="phish-prob-bar" class="prob-bar-fill" style="background:${probabilityColor(prob)};"></div>
+        </div>
+      </div>
+      ${indicators ? `<div class="section-label">🚩 Detected Indicators</div><ul class="indicators-list">${indicators}</ul>` : ''}
+      ${r.eli12_explanation ? `<div class="eli12-box"><div class="eli12-label">⚡ Shadow Explains</div>${escapeHTML(r.eli12_explanation)}</div>` : ''}
+    </div>`;
+    // Animate bar
+    requestAnimationFrame(() => {
+        setTimeout(() => { shadow.getElementById('phish-prob-bar').style.width = prob + '%'; }, 50);
+    });
+}
+
+// ── Render APK Result ──
+function renderApkResult(shadow, r) {
+    const el = shadow.getElementById('apk-result');
+    const risk = r.risk_score || 0;
+    const lvl = (r.risk_level || 'SAFE').toLowerCase();
+    const lvlMap = { critical:'class-phishing', high:'class-suspicious', medium:'class-low_risk', low:'class-safe', safe:'class-safe' };
+
+    const dangerPerms = (r.dangerous_permissions || []).map(p =>
+        `<li class="perm-item danger"><span class="perm-icon">⚠</span><div><div class="perm-name">${p.permission}</div><div class="perm-reason">${p.reason||''}</div></div></li>`
+    ).join('');
+    const safePerms = (r.safe_permissions || []).slice(0,5).map(p =>
+        `<li class="perm-item safe"><span class="perm-icon">✓</span><div><div class="perm-name">${p.permission}</div></div></li>`
+    ).join('');
+    const combos = (r.combo_flags || []).map(f => `<div class="combo-flag">${escapeHTML(String(f))}</div>`).join('');
+
+    el.innerHTML = `
+    <div class="result-card">
+      <div class="result-header">
+        <span class="result-title">${escapeHTML(r.app_name || 'App')} Risk</span>
+        <span class="class-badge ${lvlMap[lvl] || 'class-safe'}">${r.risk_level || 'SAFE'}</span>
+      </div>
+      <div class="risk-gauge-wrap">
+        <div class="risk-num" style="background:linear-gradient(135deg,${probabilityColor(risk)},${probabilityColor(Math.min(risk+20,100))});-webkit-background-clip:text;">${risk}</div>
+        <div style="font-size:11px;color:#64748b;">/ 100 Risk Score</div>
+      </div>
+      ${combos ? `<div class="section-label">🔥 Danger Combos</div>${combos}` : ''}
+      ${dangerPerms ? `<div class="section-label">🚨 Dangerous Permissions</div><ul class="perm-list">${dangerPerms}</ul>` : ''}
+      ${safePerms ? `<div class="section-label">✅ Safe Permissions (${(r.safe_permissions||[]).length})</div><ul class="perm-list">${safePerms}</ul>` : ''}
+      ${r.explanation ? `<div class="eli12-box"><div class="eli12-label">⚡ Shadow Explains</div>${escapeHTML(r.explanation)}</div>` : ''}
+    </div>`;
+}
+
+// ── Render Breach Result ──
+function renderBreachResult(shadow, r) {
+    const el = shadow.getElementById('breach-result');
+    if (!r.total_breaches) {
+        el.innerHTML = `
+        <div class="breach-clean">
+          <div class="breach-clean-icon">🛡️</div>
+          <div class="breach-clean-title">No Breaches Found</div>
+          <div class="breach-clean-sub">${escapeHTML(r.email)} wasn't found in our breach database. Stay safe — use strong unique passwords.</div>
+        </div>`;
+        return;
+    }
+    const sevMap = { CRITICAL:'sev-critical', HIGH:'sev-high', MEDIUM:'sev-medium', LOW:'sev-low' };
+    const breachItems = (r.breaches || []).map(b => {
+        const dataTags = (b.data_exposed || []).map(d => `<span>${escapeHTML(String(d))}</span>`).join('');
+        return `
+        <div class="breach-item">
+          <div class="breach-item-header">
+            <span class="breach-source">${escapeHTML(b.source)}</span>
+            <span class="sev-badge ${sevMap[b.severity]||'sev-low'}">${b.severity}</span>
+          </div>
+          <div class="breach-date">📅 ${escapeHTML(b.breach_date || 'Unknown date')}</div>
+          <div class="breach-data" style="margin-top:5px;">${dataTags}</div>
+          <div class="breach-rec">💡 ${escapeHTML(b.recommendation || '')}</div>
+        </div>`;
+    }).join('');
+
+    el.innerHTML = `
+    <div style="margin-top:12px;">
+      <div style="font-size:13px;color:#fca5a5;font-weight:700;margin-bottom:2px;">⚠ ${r.total_breaches} Breach${r.total_breaches !== 1 ? 'es' : ''} Found</div>
+      <div style="font-size:11px;color:#64748b;margin-bottom:10px;">${escapeHTML(r.email)}</div>
+      ${breachItems}
+      <div class="overall-rec">${escapeHTML(r.overall_recommendation || '')}</div>
+    </div>`;
+}
+
+// ── Update Protection Center recs ──
+function updateProtCenter(shadow, data) {
+    const tl = data.threat_level || 'UNKNOWN';
+    let recsHtml = '';
+    if (tl === 'TRUSTED') recsHtml = '✅ Site appears safe. Continue browsing normally.';
+    else if (tl === 'SAFE') recsHtml = '✅ Minor risks detected. Exercise normal caution.';
+    else if (tl === 'SUSPICIOUS') recsHtml = '⚠️ Potential security concerns. Avoid entering sensitive info.';
+    else if (tl === 'DANGEROUS') recsHtml = '🚨 High risk detected. Do not enter passwords. Leave immediately.';
+    else if (tl === 'CRITICAL') recsHtml = '🚨 Phishing indicators confirmed. Credentials at risk. Leave NOW.';
+    else recsHtml = '⚠️ Unknown status. Proceed with caution.';
+    shadow.getElementById('pc-recs').innerHTML = recsHtml;
+}
+
+// ── Render Detailed Analysis ──
+function renderDetailedAnalysis(shadow) {
+    const data = window.currentScanData || {};
+    shadow.getElementById('da-domain').textContent = data.domain || window.location.hostname;
+    shadow.getElementById('da-threat').textContent = data.threat_level || 'UNKNOWN';
+    shadow.getElementById('da-shadow').textContent = data.shadow_score || '0';
+    shadow.getElementById('da-trust').textContent = (100 - (data.exposure_score || 0)) + '';
+    shadow.getElementById('da-risk').textContent = (100 - (data.shadow_score || 0)) + '';
+    shadow.getElementById('da-exposure').textContent = (data.exposure_score || 0) + '';
+
+    const reasonsList = shadow.getElementById('da-reasons');
+    reasonsList.innerHTML = '';
+    (data.reasons || ['No specific reasons provided']).forEach(r => {
+        const li = document.createElement('li'); li.textContent = r; reasonsList.appendChild(li);
+    });
+
+    const actionsList = shadow.getElementById('da-actions');
+    actionsList.innerHTML = '';
+    (data.recommended_actions || ['Exercise normal caution']).forEach(a => {
+        const li = document.createElement('li'); li.textContent = a; actionsList.appendChild(li);
+    });
+
+    const breakdown = shadow.getElementById('da-breakdown');
+    breakdown.innerHTML = '';
+    const risks = [
+        {label:'Phishing Risk', val: data.phishing_probability || 0},
+        {label:'Domain Spoof Risk', val: data.domain_spoof_probability || 0},
+        {label:'Credential Risk', val: data.credential_risk || 0},
+        {label:'Redirect Risk', val: data.redirect_risk || 0}
+    ];
+    risks.forEach(risk => {
+        const color = probabilityColor(risk.val);
+        breakdown.innerHTML += `
+        <div style="display:flex;justify-content:space-between;font-size:11px;color:#94a3b8;margin-top:5px;">
+            <span>${risk.label}</span><span style="color:${color};font-family:'JetBrains Mono',monospace;">${risk.val}%</span>
+        </div>
+        <div style="width:100%;height:5px;background:rgba(255,255,255,.08);border-radius:3px;overflow:hidden;margin-bottom:5px;">
+            <div style="width:${risk.val}%;height:100%;background:${color};border-radius:3px;transition:width .8s;"></div>
+        </div>`;
+    });
+}
+
+// =============================================================================
+// UPDATE SCAN TAB UI (called after scan result)
+// =============================================================================
+
+function updateScanTabUI(data) {
     const overlay = document.getElementById("shadowmap-overlay-root");
     if (!overlay) return;
     const shadow = overlay.shadowRoot;
@@ -922,105 +1256,85 @@ function updateOverlayUI(data) {
     const exposure = data.exposure_score !== undefined ? data.exposure_score : 0;
     const threatLevel = data.threat_level || "UNKNOWN";
     const displayDomain = data.domain || data.url || window.location.hostname || "Unknown";
-    
+
+    window.currentScanData = data;
+
     shadow.getElementById("sm-domain").textContent = displayDomain;
     shadow.getElementById("sm-score").textContent = shadowScore;
     shadow.getElementById("sm-exposure").textContent = exposure + "%";
-    
-    window.currentScanData = data;
 
-    // Update Badge
-    const badge = shadow.getElementById("sm-badge");
-    badge.textContent = threatLevel;
-    badge.className = "badge"; 
-    if (threatLevel === "TRUSTED") badge.classList.add("badge-trusted");
-    else if (threatLevel === "SAFE") badge.classList.add("badge-safe");
-    else if (threatLevel === "WARNING") badge.classList.add("badge-warning");
-    else if (threatLevel === "DANGEROUS") badge.classList.add("badge-dangerous");
-    else badge.classList.add("badge-critical");
+    // Animate ring
+    const circumference = 264;
+    const offset = circumference - (shadowScore / 100) * circumference;
+    const ring = shadow.getElementById("sm-ring-circle");
+    ring.setAttribute("stroke", "url(#ring-grad)");
+    // Force reflow for animation
+    ring.style.transition = "none";
+    ring.style.strokeDashoffset = "264";
+    requestAnimationFrame(() => {
+        ring.style.transition = "stroke-dashoffset 1.2s cubic-bezier(.4,0,.2,1)";
+        ring.style.strokeDashoffset = String(offset);
+    });
 
-    // Update Ring Gradient & Score Color
+    // Colors based on score
     const stop1 = shadow.getElementById("ring-stop-1");
     const stop2 = shadow.getElementById("ring-stop-2");
     const scoreEl = shadow.getElementById("sm-score");
-    if (shadowScore >= 95) { 
-        stop1.setAttribute("stop-color", "#22c55e"); stop2.setAttribute("stop-color", "#16a34a"); 
-        scoreEl.style.color = "#22c55e";
-    } else if (shadowScore >= 80) { 
-        stop1.setAttribute("stop-color", "#06b6d4"); stop2.setAttribute("stop-color", "#0891b2"); 
-        scoreEl.style.color = "#06b6d4";
-    } else if (shadowScore >= 60) { 
-        stop1.setAttribute("stop-color", "#eab308"); stop2.setAttribute("stop-color", "#ca8a04"); 
-        scoreEl.style.color = "#eab308";
-    } else if (shadowScore >= 40) { 
-        stop1.setAttribute("stop-color", "#f97316"); stop2.setAttribute("stop-color", "#ea580c"); 
-        scoreEl.style.color = "#f97316";
-    } else { 
-        stop1.setAttribute("stop-color", "#ef4444"); stop2.setAttribute("stop-color", "#dc2626"); 
-        scoreEl.style.color = "#ef4444";
-    }
+    let c1, c2, textColor;
+    if (shadowScore >= 86) { c1="#10b981"; c2="#059669"; textColor="#10b981"; }
+    else if (shadowScore >= 71) { c1="#06b6d4"; c2="#0891b2"; textColor="#06b6d4"; }
+    else if (shadowScore >= 51) { c1="#f59e0b"; c2="#d97706"; textColor="#f59e0b"; }
+    else if (shadowScore >= 31) { c1="#f97316"; c2="#ea580c"; textColor="#f97316"; }
+    else { c1="#ef4444"; c2="#dc2626"; textColor="#ef4444"; }
+    stop1.setAttribute("stop-color", c1);
+    stop2.setAttribute("stop-color", c2);
+    scoreEl.style.color = textColor;
 
-    // Update Sphere Gradient based on Exposure
+    // Badge
+    const badge = shadow.getElementById("sm-badge");
+    badge.textContent = threatLevel;
+    const badgeMap = { TRUSTED:'badge-trusted', SAFE:'badge-safe', SUSPICIOUS:'badge-suspicious', DANGEROUS:'badge-dangerous', CRITICAL:'badge-critical' };
+    badge.className = 'threat-badge ' + (badgeMap[threatLevel] || 'badge-unknown');
+
+    // Sphere
     const sphere = shadow.getElementById("sm-sphere");
-    let sphereGradient = "";
-    let sphereGlow = "";
-    if (exposure <= 20) { // Green
-        sphereGradient = "radial-gradient(circle at 35% 35%, rgba(134, 239, 172, 0.9) 0%, rgba(34, 197, 94, 0.8) 40%, rgba(5, 46, 22, 0.95) 100%)";
-        sphereGlow = "0 0 30px rgba(34, 197, 94, 0.4)";
-    } else if (exposure <= 50) { // Yellow
-        sphereGradient = "radial-gradient(circle at 35% 35%, rgba(253, 224, 71, 0.9) 0%, rgba(234, 179, 8, 0.8) 40%, rgba(66, 32, 6, 0.95) 100%)";
-        sphereGlow = "0 0 30px rgba(234, 179, 8, 0.4)";
-    } else if (exposure <= 75) { // Orange
-        sphereGradient = "radial-gradient(circle at 35% 35%, rgba(253, 186, 116, 0.9) 0%, rgba(249, 115, 22, 0.8) 40%, rgba(67, 20, 7, 0.95) 100%)";
-        sphereGlow = "0 0 30px rgba(249, 115, 22, 0.4)";
-    } else { // Red
-        sphereGradient = "radial-gradient(circle at 35% 35%, rgba(252, 165, 165, 0.9) 0%, rgba(239, 68, 68, 0.8) 40%, rgba(69, 10, 10, 0.95) 100%)";
-        sphereGlow = "0 0 30px rgba(239, 68, 68, 0.4)";
-    }
-    sphere.style.background = sphereGradient;
-    sphere.style.boxShadow = `inset -10px -10px 20px rgba(0,0,0,0.6), inset 10px 10px 20px rgba(255,255,255,0.3), ${sphereGlow}`;
+    let sGrad, sGlow;
+    if (exposure <= 20) { sGrad="radial-gradient(circle at 35% 35%, rgba(134,239,172,.9) 0%, rgba(34,197,94,.8) 40%, rgba(5,46,22,.95) 100%)"; sGlow="0 0 28px rgba(34,197,94,.4)"; }
+    else if (exposure <= 50) { sGrad="radial-gradient(circle at 35% 35%, rgba(253,224,71,.9) 0%, rgba(234,179,8,.8) 40%, rgba(66,32,6,.95) 100%)"; sGlow="0 0 28px rgba(234,179,8,.4)"; }
+    else if (exposure <= 75) { sGrad="radial-gradient(circle at 35% 35%, rgba(253,186,116,.9) 0%, rgba(249,115,22,.8) 40%, rgba(67,20,7,.95) 100%)"; sGlow="0 0 28px rgba(249,115,22,.4)"; }
+    else { sGrad="radial-gradient(circle at 35% 35%, rgba(252,165,165,.9) 0%, rgba(239,68,68,.8) 40%, rgba(69,10,10,.95) 100%)"; sGlow="0 0 28px rgba(239,68,68,.4)"; }
+    sphere.style.background = sGrad;
+    sphere.style.boxShadow = `inset -8px -8px 16px rgba(0,0,0,.6), inset 8px 8px 16px rgba(255,255,255,.3), ${sGlow}`;
 
-    // Helper for Pill colors
-    function applyPillColor(pillId, valId, value) {
+    // Pills
+    function applyPill(pillId, valId, value) {
         const pill = shadow.getElementById(pillId);
-        const valSpan = shadow.getElementById(valId);
-        if (!pill || !valSpan) return;
-        valSpan.textContent = value + "%";
-        let color, border, bgHover;
-        if (value <= 25) { color = "#22c55e"; border = "rgba(34,197,94,.5)"; bgHover = "rgba(34,197,94,.1)"; } 
-        else if (value <= 50) { color = "#eab308"; border = "rgba(234,179,8,.5)"; bgHover = "rgba(234,179,8,.1)"; } 
-        else if (value <= 75) { color = "#f97316"; border = "rgba(249,115,22,.5)"; bgHover = "rgba(249,115,22,.1)"; } 
-        else { color = "#ef4444"; border = "rgba(239,68,68,.6)"; bgHover = "rgba(239,68,68,.1)"; }
-
-        valSpan.style.color = color;
-        pill.style.borderColor = border;
-        pill.onmouseenter = () => {
-            pill.style.background = bgHover;
-            pill.style.transform = "translateY(-1px)";
-            pill.style.boxShadow = `0 4px 12px ${color}26`;
-        };
-        pill.onmouseleave = () => {
-            pill.style.background = "rgba(20, 15, 20, 0.7)";
-            pill.style.transform = "translateY(0)";
-            pill.style.boxShadow = "none";
-        };
+        const span = shadow.getElementById(valId);
+        if (!pill || !span) return;
+        span.textContent = value + '%';
+        const color = probabilityColor(value);
+        span.style.color = color;
+        pill.style.borderColor = color.replace(')', ',.3)').replace('rgb','rgba');
     }
+    if (data.phishing_probability !== undefined) applyPill("pill-phishing","sm-phishing-val", data.phishing_probability);
+    if (data.domain_spoof_probability !== undefined) applyPill("pill-spoof","sm-spoof-val", data.domain_spoof_probability);
+    if (data.credential_risk !== undefined) applyPill("pill-cred","sm-cred-val", data.credential_risk);
+    if (data.redirect_risk !== undefined) applyPill("pill-redirect","sm-redirect-val", data.redirect_risk);
 
-    if (data.phishing_probability !== undefined) applyPillColor("pill-phishing", "sm-phishing-val", data.phishing_probability);
-    if (data.domain_spoof_probability !== undefined) applyPillColor("pill-spoof", "sm-spoof-val", data.domain_spoof_probability);
-    if (data.credential_risk !== undefined) applyPillColor("pill-cred", "sm-cred-val", data.credential_risk);
-    if (data.redirect_risk !== undefined) applyPillColor("pill-redirect", "sm-redirect-val", data.redirect_risk);
-
-    shadow.getElementById("sm-progress-fill").style.width = (data.risk_score || 0) + "%";
-    
-    // Fix escaping issues in AI explanation
-    let rawText = data.ai_explanation || "No threats detected.";
+    // AI explanation
+    let rawText = data.ai_explanation || "Analysis complete. No specific threats detected.";
     rawText = rawText.replace(/\\n/g, '\n').replace(/\\r/g, '').replace(/\\/g, '');
     shadow.getElementById("sm-ai-explanation").textContent = rawText;
 }
 
-// =========================
+// =============================================================================
+// COMPATIBILITY ALIAS
+// =============================================================================
+
+function updateOverlayUI(data) { updateScanTabUI(data); }
+
+// =============================================================================
 // STARTUP
-// =========================
+// =============================================================================
 
 createFloatingButton();

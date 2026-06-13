@@ -10,7 +10,10 @@
         <header>
             <div class="logo">
                 <span class="shield-icon">🛡️</span>
-                <span class="logo-text">ShadowMap AI</span>
+                <div>
+                    <div class="logo-text">ShadowMap AI</div>
+                    <div class="logo-sub">Cybersecurity Cockpit</div>
+                </div>
             </div>
             <div class="window-controls">
                 <button id="minimize-btn" class="control-btn">—</button>
@@ -34,8 +37,14 @@
                 <section class="score-section">
                     <div class="score-circle">
                         <svg viewBox="0 0 100 100">
+                            <defs>
+                                <linearGradient id="electron-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+                                    <stop id="egrad-1" offset="0%" stop-color="#ef4444"/>
+                                    <stop id="egrad-2" offset="100%" stop-color="#f97316"/>
+                                </linearGradient>
+                            </defs>
                             <circle class="bg" cx="50" cy="50" r="45"></circle>
-                            <circle id="score-fill" class="fill" cx="50" cy="50" r="45"></circle>
+                            <circle id="score-fill" class="fill" cx="50" cy="50" r="45" stroke="url(#electron-grad)"></circle>
                         </svg>
                         <div class="score-text">
                             <span id="score-number">0</span>

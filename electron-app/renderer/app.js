@@ -1,105 +1,180 @@
-const loadingState = document.getElementById('loading-state');
-const resultView = document.getElementById('result-view');
-const scoreNumber = document.getElementById('score-number');
-const scoreFill = document.getElementById('score-fill');
-const riskBadge = document.getElementById('risk-level-badge');
-const domainName = document.getElementById('domain-name');
-const trustBadge = document.getElementById('trust-badge');
-const sslStatus = document.getElementById('ssl-status');
-const reasonsContainer = document.getElementById('reasons-container');
-const aiExplanation = document.getElementById('ai-explanation');
-const footerShadowScore = document.getElementById('footer-shadow-score');
+// ShadowMap Electron Renderer — v2.0
+// Upgraded: category scores, AI explanation, new color system
 
-const closeBtn = document.getElementById('close-btn');
+const loadingState = document.getElementById('loading-state');
+const resultView   = document.getElementById('result-view');
+const scoreNumber  = document.getElementById('score-number');
+const scoreFill    = document.getElementById('score-fill');
+const riskBadge    = document.getElementById('risk-level-badge');
+const domainName   = document.getElementById('domain-name');
+const trustBadge   = document.getElementById('trust-badge');
+const sslStatus    = document.getElementById('ssl-status');
+const reasonsContainer = document.getElementById('reasons-container');
+const aiExplanation    = document.getElementById('ai-explanation');
+const footerShadowScore = document.getElementById('footer-shadow-score');
+const closeBtn    = document.getElementById('close-btn');
 const minimizeBtn = document.getElementById('minimize-btn');
-const blockBtn = document.getElementById('block-btn');
+const blockBtn    = document.getElementById('block-btn');
 const continueBtn = document.getElementById('continue-btn');
 
-console.log("Renderer initialized and waiting for events...");
-
-// --- Event Listeners ---
-
-window.shadowmap.onContextUpdate((context) => {
-    console.log("UI: Context Update Received", context);
-
-    // update domain immediately
-    const host = new URL(context.url).hostname;
-    domainName.textContent = host;
-
-    if (context.risk_cache) {
-        updateUI(context.risk_cache, true);
+// Inject SVG gradient + category score markup on first load
+function injectUI() {
+    // Add SVG defs gradient to the score circle
+    const svg = document.querySelector('.score-circle svg');
+    if (svg && !svg.querySelector('defs')) {
+        const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+        defs.innerHTML = `
+        <linearGradient id="electron-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop id="egrad-1" offset="0%" stop-color="#ef4444"/>
+            <stop id="egrad-2" offset="100%" stop-color="#f97316"/>
+        </linearGradient>`;
+        svg.prepend(defs);
     }
+
+    // Inject category scores section between info-section and threats-section
+    const threatsSection = document.querySelector('.threats-section');
+    if (threatsSection && !document.getElementById('category-scores-section')) {
+        const catSection = document.createElement('section');
+        catSection.className = 'category-scores';
+        catSection.id = 'category-scores-section';
+        catSection.innerHTML = `
+        <h3>Category Breakdown</h3>
+        ${['trust','authenticity','privacy','threat'].map(cat => `
+        <div class="cat-row" id="cat-row-${cat}">
+            <div class="cat-header">
+                <span>${cat.charAt(0).toUpperCase() + cat.slice(1)}</span>
+                <span class="cat-score" id="cat-val-${cat}">--</span>
+            </div>
+            <div class="cat-bar-track">
+                <div class="cat-bar-fill" id="cat-bar-${cat}" style="width:0%;background:#8b5cf6;"></div>
+            </div>
+        </div>`).join('')}`;
+        threatsSection.parentNode.insertBefore(catSection, threatsSection);
+    }
+}
+
+console.log("ShadowMap Electron Renderer v2.0 initialized");
+injectUI();
+
+// ── Score → color mapping ──────────────────────────────────────────────────
+function scoreColors(score) {
+    if (score >= 86) return { c1: '#10b981', c2: '#059669', cls: 'risk-trusted',    label: 'TRUSTED'    };
+    if (score >= 71) return { c1: '#22d3ee', c2: '#0891b2', cls: 'risk-safe',       label: 'SAFE'       };
+    if (score >= 51) return { c1: '#f59e0b', c2: '#d97706', cls: 'risk-suspicious', label: 'SUSPICIOUS' };
+    if (score >= 31) return { c1: '#f97316', c2: '#ea580c', cls: 'risk-dangerous',  label: 'DANGEROUS'  };
+    return              { c1: '#ef4444', c2: '#dc2626', cls: 'risk-critical',   label: 'CRITICAL'   };
+}
+
+function catBarColor(score) {
+    if (score >= 75) return '#10b981';
+    if (score >= 50) return '#f59e0b';
+    if (score >= 25) return '#f97316';
+    return '#ef4444';
+}
+
+// ── Socket / IPC Events ────────────────────────────────────────────────────
+window.shadowmap.onContextUpdate((context) => {
+    console.log("Context update:", context);
+    try {
+        const host = new URL(context.url).hostname;
+        domainName.textContent = host;
+        document.getElementById('scanning-url').textContent = host;
+    } catch(e) {}
 });
 
-// Listener for F4 trigger (to show loading state)
 window.shadowmap.onTriggerScan(() => {
-    console.log("UI: F4 Triggered - Showing Loading State");
+    console.log("F4 triggered — showing loader");
     loadingState.classList.remove('hidden');
     resultView.classList.add('hidden');
     document.getElementById('scanning-url').textContent = "Performing AI Security Analysis...";
 });
 
 window.shadowmap.onScanResult((data) => {
-    console.log("UI: Full Scan Result Received", data);
+    console.log("Scan result received");
     updateUI(data, false);
 });
 
+// ── Main UI Update ─────────────────────────────────────────────────────────
 function updateUI(data, isCached) {
     loadingState.classList.add('hidden');
     resultView.classList.remove('hidden');
 
-    domainName.textContent = data.domain || new URL(data.url).hostname;
-    trustBadge.textContent = isCached ? "INSTINCT" : "AI ANALYZED";
-    sslStatus.textContent = data.ssl_valid ? 'SSL VALID' : 'INSECURE';
+    const shadowScore = data.shadow_score || 0;
+    const exposure    = data.exposure_score || (100 - shadowScore);
+    const tl          = data.threat_level || 'UNKNOWN';
 
-    const score = data.risk_score || 0;
-    animateScore(score);
+    // Domain + meta
+    domainName.textContent = data.domain || (data.url ? new URL(data.url).hostname : 'Unknown');
+    trustBadge.textContent = isCached ? 'INSTINCT' : 'AI ANALYZED';
+    sslStatus.textContent  = data.ssl_valid ? 'SSL VALID' : 'HTTP';
 
-    let color = '#2EE59D';
-    if (score > 75) color = '#FF4D4D';
-    else if (score > 50) color = '#FFB020';
-    else if (score > 25) color = '#4DA3FF';
+    // Animated score ring
+    animateScore(shadowScore);
 
-    scoreFill.style.stroke = color;
-    scoreFill.style.filter = `drop-shadow(0 0 5px ${color})`;
-    riskBadge.style.backgroundColor = color;
-    riskBadge.textContent = data.risk_level || "LOW";
+    // Colors
+    const { c1, c2, cls, label } = scoreColors(shadowScore);
+    const grad1 = document.getElementById('egrad-1');
+    const grad2 = document.getElementById('egrad-2');
+    if (grad1) grad1.setAttribute('stop-color', c1);
+    if (grad2) grad2.setAttribute('stop-color', c2);
+    scoreNumber.style.color = c1;
 
+    // Risk badge
+    riskBadge.className = 'risk-badge ' + cls;
+    riskBadge.textContent = label;
+
+    // Footer
+    footerShadowScore.textContent = shadowScore;
+
+    // ── Category scores ──
+    const cats = data.category_scores || {};
+    ['trust','authenticity','privacy','threat'].forEach(cat => {
+        const score = cats[cat] !== undefined ? cats[cat] : '--';
+        const valEl = document.getElementById(`cat-val-${cat}`);
+        const barEl = document.getElementById(`cat-bar-${cat}`);
+        if (valEl) valEl.textContent = score !== '--' ? score : '--';
+        if (barEl && score !== '--') {
+            barEl.style.background = catBarColor(score);
+            setTimeout(() => { barEl.style.width = score + '%'; }, 100);
+        }
+    });
+
+    // ── Reasons pills ──
     reasonsContainer.innerHTML = '';
-    const reasons = data.reasons || ["Analyzing..."];
+    const reasons = data.reasons || ['Analysis complete'];
     reasons.forEach(reason => {
         const pill = document.createElement('span');
-        pill.className = 'pill';
+        const isSafe = reason.toLowerCase().includes('safe') || reason.toLowerCase().includes('initial');
+        pill.className = 'threat-pill' + (isSafe ? ' safe' : '');
         pill.textContent = reason;
         reasonsContainer.appendChild(pill);
     });
 
-    aiExplanation.textContent = data.ai_explanation || (isCached ? "Press F4 for deep AI analysis." : "No threats detected.");
+    // ── AI Explanation ──
+    let rawText = data.ai_explanation || (isCached ? 'Press F4 for full AI analysis.' : 'No immediate threats detected.');
+    rawText = rawText.replace(/\\n/g, '\n').replace(/\\r/g, '').replace(/\\/g, '');
+    aiExplanation.textContent = rawText;
 }
 
+// ── Animated counter + ring ────────────────────────────────────────────────
 function animateScore(target) {
-    let current = parseInt(scoreNumber.textContent) || 0;
-    const duration = 600;
-    const startTime = performance.now();
-    const startValue = current;
-    const circumference = 282.7;
+    let current   = parseInt(scoreNumber.textContent) || 0;
+    const circ    = 283;
+    const start   = performance.now();
+    const from    = current;
 
-    function update(currentTime) {
-        const elapsed = currentTime - startTime;
-        const progress = Math.min(elapsed / duration, 1);
-        const easedProgress = progress * (2 - progress);
-
-        current = Math.floor(startValue + (target - startValue) * easedProgress);
-        scoreNumber.textContent = current;
-        const offset = circumference - (current / 100) * circumference;
-        scoreFill.style.strokeDashoffset = offset;
-
-        if (progress < 1) requestAnimationFrame(update);
-    }
-    requestAnimationFrame(update);
+    (function tick(now) {
+        const t = Math.min((now - start) / 800, 1);
+        const ease = t < .5 ? 2*t*t : -1+(4-2*t)*t;
+        const val  = Math.round(from + (target - from) * ease);
+        scoreNumber.textContent = val;
+        scoreFill.style.strokeDashoffset = String(circ - (val / 100) * circ);
+        if (t < 1) requestAnimationFrame(tick);
+    })(start);
 }
 
-// UI Controls
-closeBtn.onclick = () => window.shadowmap.closeWindow();
+// ── Window Controls ────────────────────────────────────────────────────────
+closeBtn.onclick    = () => window.shadowmap.closeWindow();
 minimizeBtn.onclick = () => window.shadowmap.minimizeWindow();
 continueBtn.onclick = () => window.shadowmap.closeWindow();
+blockBtn.onclick    = () => console.log("[Block] Not implemented in Electron overlay.");

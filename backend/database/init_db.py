@@ -7,7 +7,14 @@ def init_db():
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
 
-    # Create risk_events table
+    # Drop old tables to allow schema upgrades cleanly
+    cursor.execute('DROP TABLE IF EXISTS breach_records')
+    cursor.execute('DROP TABLE IF EXISTS risk_events')
+    cursor.execute('DROP TABLE IF EXISTS user_profile')
+    cursor.execute('DROP TABLE IF EXISTS chat_sessions')
+    cursor.execute('DROP TABLE IF EXISTS scan_history')
+
+    # --- risk_events ---
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS risk_events (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -20,7 +27,7 @@ def init_db():
     )
     ''')
 
-    # Create breach_records table
+    # --- breach_records (enriched schema) ---
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS breach_records (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -28,11 +35,13 @@ def init_db():
       source TEXT,
       severity TEXT,
       data_exposed TEXT,
+      breach_date TEXT,
+      recommendation TEXT,
       detected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     ''')
 
-    # Create user_profile table
+    # --- user_profile ---
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS user_profile (
       id INTEGER PRIMARY KEY,
@@ -43,28 +52,93 @@ def init_db():
     )
     ''')
 
-    # Seed user_profile
-    cursor.execute('SELECT COUNT(*) FROM user_profile')
-    if cursor.fetchone()[0] == 0:
-        cursor.execute('INSERT INTO user_profile (id, shadow_score) VALUES (1, 50)')
+    # --- chat_sessions ---
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS chat_sessions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id TEXT,
+      role TEXT,
+      content TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    ''')
 
-    # Seed breach_records
-    cursor.execute('SELECT COUNT(*) FROM breach_records')
-    if cursor.fetchone()[0] == 0:
-        breaches = [
-            ('test@example.com', 'LinkedIn 2021', 'HIGH', json.dumps(['email', 'password_hash'])),
-            ('test@example.com', 'Adobe 2013', 'MEDIUM', json.dumps(['email', 'username'])),
-            ('user@gmail.com', 'Canva 2019', 'HIGH', json.dumps(['email', 'name', 'password'])),
-        ]
-        # Adding more fake records to reach 20 as per spec
-        for i in range(17):
-            breaches.append((f'user{i}@example.com', f'Site {i} Breach', 'LOW', json.dumps(['email'])))
-            
-        cursor.executemany('INSERT INTO breach_records (email, source, severity, data_exposed) VALUES (?, ?, ?, ?)', breaches)
+    # --- scan_history ---
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS scan_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      domain TEXT,
+      shadow_score INTEGER,
+      threat_level TEXT,
+      scanned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    ''')
+
+    # Seed user_profile
+    cursor.execute('INSERT INTO user_profile (id, shadow_score) VALUES (1, 50)')
+
+    # Seed breach_records — rich demo data
+    breaches = [
+        # test@example.com — 2 breaches for demo
+        (
+            'test@example.com', 'LinkedIn', 'HIGH',
+            json.dumps(['email', 'password_hash', 'phone_number', 'location']),
+            '2024-02-14',
+            'Change your LinkedIn password immediately and enable two-factor authentication.'
+        ),
+        (
+            'test@example.com', 'Adobe Creative Cloud', 'MEDIUM',
+            json.dumps(['email', 'username', 'encrypted_password']),
+            '2023-09-05',
+            'Update your Adobe account password. Enable MFA on all Adobe services.'
+        ),
+
+        # victim@phishing.com — 3 breaches
+        (
+            'victim@phishing.com', 'RockYou2024', 'CRITICAL',
+            json.dumps(['email', 'plaintext_password', 'ssn', 'credit_card']),
+            '2024-07-04',
+            'URGENT: Your plaintext password was exposed. Change all passwords immediately. Monitor for identity theft.'
+        ),
+        (
+            'victim@phishing.com', 'Dropbox', 'HIGH',
+            json.dumps(['email', 'password_hash', 'account_token']),
+            '2022-08-31',
+            'Revoke all Dropbox sessions and reset your password. Check for unauthorized file access.'
+        ),
+        (
+            'victim@phishing.com', 'Twitter / X', 'HIGH',
+            json.dumps(['email', 'username', 'phone_number', 'birth_date']),
+            '2023-01-05',
+            'Change your Twitter/X password and review connected apps for suspicious access.'
+        ),
+
+        # user@gmail.com
+        (
+            'user@gmail.com', 'Canva', 'HIGH',
+            json.dumps(['email', 'name', 'password_hash']),
+            '2019-05-24',
+            'Update your Canva password. Check if same password used elsewhere and change those too.'
+        ),
+
+        # Demo fast-fill data
+        (
+            'admin@shadowmap.ai', 'HaveIBeenPwned Demo', 'MEDIUM',
+            json.dumps(['email', 'username']),
+            '2023-11-11',
+            'Demo account. No action needed.'
+        ),
+    ]
+
+    cursor.executemany(
+        'INSERT INTO breach_records (email, source, severity, data_exposed, breach_date, recommendation) VALUES (?, ?, ?, ?, ?, ?)',
+        breaches
+    )
 
     conn.commit()
     conn.close()
-    print(f"Database initialized at {db_path}")
+    print(f"[ShadowMap] Database initialized at {db_path}")
+    print(f"[ShadowMap] Seeded {len(breaches)} breach records across 4 test emails.")
 
 if __name__ == "__main__":
     init_db()
