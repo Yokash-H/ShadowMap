@@ -272,6 +272,33 @@ Shadow: (respond in 2-4 sentences max, be specific and actionable. Use emojis sp
             "reply": "I'm having trouble connecting right now. Please check your API key or try again in a moment."
         })
 
+
+# =============================================================================
+# CREDENTIAL FIREWALL INCIDENT LOGGING
+# =============================================================================
+
+@app.route('/api/log_incident', methods=['POST'])
+def log_incident():
+    data = request.json or {}
+    domain = data.get('domain', 'unknown')
+    risk_score = data.get('risk_score', 0)
+    action_taken = data.get('action', 'blocked')
+    
+    print(f"[FIREWALL INCIDENT]: Intercepted {domain} (Risk: {risk_score}%, Action: {action_taken})")
+    
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.execute(
+            'INSERT INTO firewall_incidents (domain, risk_score, action_taken) VALUES (?, ?, ?)',
+            (domain, int(risk_score), action_taken)
+        )
+        conn.commit()
+        conn.close()
+        return jsonify({"status": "success", "message": "Incident logged successfully"})
+    except Exception as e:
+        print(f"[DB firewall_incidents Error]: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
 # =============================================================================
 # SOCKET.IO
 # =============================================================================

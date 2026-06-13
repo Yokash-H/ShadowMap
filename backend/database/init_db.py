@@ -13,6 +13,7 @@ def init_db():
     cursor.execute('DROP TABLE IF EXISTS user_profile')
     cursor.execute('DROP TABLE IF EXISTS chat_sessions')
     cursor.execute('DROP TABLE IF EXISTS scan_history')
+    cursor.execute('DROP TABLE IF EXISTS firewall_incidents')
 
     # --- risk_events ---
     cursor.execute('''
@@ -71,6 +72,17 @@ def init_db():
       shadow_score INTEGER,
       threat_level TEXT,
       scanned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    ''')
+
+    # --- firewall_incidents ---
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS firewall_incidents (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      domain TEXT,
+      risk_score INTEGER,
+      action_taken TEXT,
+      timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     ''')
 
