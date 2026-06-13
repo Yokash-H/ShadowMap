@@ -30,11 +30,14 @@ def generate_explanation(data):
     if not API_KEY:
         return fallback_text
 
+    trackers = data.get('trackers_detected', 0)
+    
     prompt = f"""
     You are ShadowMap AI, a cybersecurity intelligence agent.
     You just analyzed the domain "{domain}".
     ShadowScore: {shadow_score}/100
     Threat Level: {threat_level}
+    Trackers Detected: {trackers}
     Technical Reasons/Flags: {', '.join(reasons)}
     
     Write an explanation exactly matching this format:
@@ -44,7 +47,7 @@ def generate_explanation(data):
     ShadowScore: {shadow_score} ({threat_level})
 
     Findings:
-    • [finding 1]
+    • [finding 1] (Ensure you explicitly mention if any DOM mutations, compromised passwords, trackers, or insecure forms were detected)
     • [finding 2]
     • [finding 3]
 

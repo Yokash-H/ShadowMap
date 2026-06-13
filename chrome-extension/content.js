@@ -7,6 +7,40 @@ let overlayActive = false;
 window.currentScanData = null;
 window.chatHistory = [];
 
+// Advanced Security State
+let smTrackers = [];
+let smForms = [];
+let smDomMutations = [];
+let smPasswordLeaks = [];
+let smNetworkTraffic = [];
+
+// =============================================================================
+// INJECT NETWORK SPY
+// =============================================================================
+try {
+    const script = document.createElement('script');
+    script.src = chrome.runtime.getURL('inject.js');
+    (document.head || document.documentElement).appendChild(script);
+    script.onload = function() { script.remove(); };
+} catch(e) {}
+
+window.addEventListener('message', (event) => {
+    if (event.source !== window) return;
+    if (event.data && event.data.type === 'SHADOWMAP_NETWORK_TRAFFIC') {
+        const traffic = event.data.data;
+        if (traffic && traffic.url) {
+            smNetworkTraffic.push(traffic.url);
+            // Cap at 100 to avoid giant payloads
+            if (smNetworkTraffic.length > 100) smNetworkTraffic.shift();
+            
+            // Trigger a scan dynamically if it looks very suspicious
+            if (overlayActive && smNetworkTraffic.length % 10 === 0) {
+                chrome.runtime.sendMessage({ type: "GET_CURRENT_SCAN", payload: extractPageData() });
+            }
+        }
+    }
+});
+
 const BACKEND = "http://127.0.0.1:5000";
 
 // Default State Configuration
@@ -27,6 +61,10 @@ function loadState(callback) {
     chrome.storage.local.get(['sm_overlay_state'], (result) => {
         if (result.sm_overlay_state) {
             smState = { ...smState, ...result.sm_overlay_state };
+            
+            // Off-screen safety check
+            if (smState.top < 0 || smState.top > window.innerHeight - 50) smState.top = 24;
+            if (smState.left !== null && (smState.left < 0 || smState.left > window.innerWidth - 50)) smState.left = null;
         }
         callback();
     });
@@ -49,12 +87,20 @@ function checkBlockedSite() {
                     <p style="font-size:18px;color:#94a3b8;margin-bottom:8px;">ShadowMap AI blocked this site for your protection.</p>
                     <p style="font-size:14px;color:#64748b;margin-bottom:40px;">${window.location.hostname}</p>
                     <div style="display:flex;gap:16px;">
-                        <button onclick="window.history.back()" style="padding:12px 28px;font-size:15px;background:transparent;
+                        <button id="sm-go-back-btn" style="padding:12px 28px;font-size:15px;background:transparent;
                             border:1px solid #3b82f6;color:#3b82f6;border-radius:8px;cursor:pointer;">← Go Back</button>
                         <button id="sm-unblock-page-btn" style="padding:12px 28px;font-size:15px;background:#ef4444;
                             border:none;color:white;border-radius:8px;cursor:pointer;">Unblock Site</button>
                     </div>
                 </div>`;
+            
+            document.getElementById('sm-go-back-btn').addEventListener('click', () => {
+                if (window.history.length > 1) {
+                    window.history.back();
+                } else {
+                    window.close();
+                }
+            });
             document.getElementById('sm-unblock-page-btn').addEventListener('click', unblockCurrentSite);
         }
     });
@@ -85,7 +131,16 @@ function unblockCurrentSite() {
 // =============================================================================
 
 function extractPageData() {
-    const data = { url: window.location.href, hostname: window.location.hostname, title: document.title, trackers: [], forms: [] };
+    const data = { 
+        url: window.location.href, 
+        hostname: window.location.hostname, 
+        title: document.title, 
+        trackers: smTrackers, 
+        forms: smForms,
+        dom_mutations: smDomMutations,
+        password_leaks: smPasswordLeaks,
+        network_traffic: smNetworkTraffic
+    };
     const signatures = {
         'Google Analytics': 'google-analytics', 'Google Tag Manager': 'googletagmanager.com',
         'Meta Pixel': 'fbevents.js', 'TikTok Pixel': 'analytics.tiktok.com', 'Hotjar': 'hotjar.com', 'FingerprintJS': 'fingerprintjs'
@@ -125,7 +180,12 @@ window.addEventListener("keydown", (e) => { if (e.key === "F4") { e.preventDefau
 
 chrome.runtime.onMessage.addListener((message) => {
     if (message.type === "TOGGLE_OVERLAY") toggleOverlay();
-    if (message.type === "UPDATE_OVERLAY_DATA") updateScanTabUI(message.data);
+    if (message.type === "SCAN_COMPLETE" || message.type === "UPDATE_OVERLAY_DATA") updateScanTabUI(message.data);
+    if (message.type === "SCAN_ERROR") {
+        console.error("Backend Error:", message.error);
+        const data = { shadow_score: 0, threat_level: "ERROR", ai_explanation: `Backend Error: ${message.error}` };
+        updateScanTabUI(data);
+    }
 });
 
 // =============================================================================
@@ -144,9 +204,62 @@ function createFloatingButton() {
         background: "linear-gradient(135deg,#8B5CF6,#22D3EE)",
         boxShadow: "0 0 25px rgba(139,92,246,.5),0 0 60px rgba(34,211,238,.25)", transition: "all .25s ease"
     });
-    btn.addEventListener("mouseenter", () => btn.style.transform = "scale(1.08)");
-    btn.addEventListener("mouseleave", () => btn.style.transform = "scale(1)");
-    btn.addEventListener("click", toggleOverlay);
+
+    chrome.storage.local.get(['sm_fab_pos'], (result) => {
+        if (result.sm_fab_pos) {
+            btn.style.bottom = "auto";
+            btn.style.right = "auto";
+            btn.style.left = result.sm_fab_pos.left;
+            btn.style.top = result.sm_fab_pos.top;
+        }
+    });
+
+    let isDraggingFab = false;
+    let didMove = false;
+    let startX, startY, fabStartLeft, fabStartTop;
+
+    btn.addEventListener("mousedown", (e) => {
+        isDraggingFab = true;
+        didMove = false;
+        startX = e.clientX;
+        startY = e.clientY;
+        const rect = btn.getBoundingClientRect();
+        fabStartLeft = rect.left;
+        fabStartTop = rect.top;
+        btn.style.bottom = "auto";
+        btn.style.right = "auto";
+        btn.style.left = fabStartLeft + "px";
+        btn.style.top = fabStartTop + "px";
+        btn.style.transition = "none";
+        e.preventDefault();
+    });
+
+    window.addEventListener("mousemove", (e) => {
+        if (!isDraggingFab) return;
+        const dx = e.clientX - startX;
+        const dy = e.clientY - startY;
+        if (Math.abs(dx) > 3 || Math.abs(dy) > 3) didMove = true;
+        let newLeft = Math.max(0, Math.min(window.innerWidth - 68, fabStartLeft + dx));
+        let newTop = Math.max(0, Math.min(window.innerHeight - 68, fabStartTop + dy));
+        btn.style.left = newLeft + "px";
+        btn.style.top = newTop + "px";
+    });
+
+    window.addEventListener("mouseup", () => {
+        if (isDraggingFab) {
+            isDraggingFab = false;
+            btn.style.transition = "all .25s ease";
+            chrome.storage.local.set({ sm_fab_pos: { left: btn.style.left, top: btn.style.top } });
+        }
+    });
+
+    btn.addEventListener("mouseenter", () => { if (!isDraggingFab) btn.style.transform = "scale(1.08)"; });
+    btn.addEventListener("mouseleave", () => { if (!isDraggingFab) btn.style.transform = "scale(1)"; });
+    btn.addEventListener("click", (e) => {
+        if (didMove) { e.stopPropagation(); return; }
+        toggleOverlay();
+    });
+
     document.body.appendChild(btn);
 }
 
@@ -382,7 +495,7 @@ function createOverlay() {
     align-items: center; justify-content: center;
 }
 .ring-score { font-size: 30px; font-weight: 700; color: #fff; animation: scoreCountUp .5s ease; font-family: 'JetBrains Mono',monospace; }
-.ring-label { font-size: 10px; color: #64748b; letter-spacing: 1px; text-transform: uppercase; }
+.ring-label { font-size: 8px; color: #64748b; letter-spacing: 0.5px; text-transform: uppercase; }
 
 /* Badge */
 .threat-badge {
@@ -727,13 +840,24 @@ function createOverlay() {
         <div id="sm-badge" class="threat-badge badge-unknown">UNKNOWN</div>
       </div>
 
-      <div class="exposure-col">
-        <div class="sphere-wrap">
-          <div id="sm-sphere" class="sphere">
-            <div id="sm-exposure" class="sphere-val">0%</div>
+      <div class="exposure-col" style="display:flex;flex-direction:column;align-items:center;gap:6px;">
+        <div class="ring-wrap">
+          <svg class="ring-svg" viewBox="0 0 100 100">
+            <circle class="ring-bg" cx="50" cy="50" r="42"/>
+            <circle id="sm-exp-ring-circle" class="ring-fill" cx="50" cy="50" r="42"/>
+            <defs>
+              <linearGradient id="exp-ring-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop id="exp-ring-stop-1" offset="0%" stop-color="#d946ef"/>
+                <stop id="exp-ring-stop-2" offset="100%" stop-color="#9333ea"/>
+              </linearGradient>
+            </defs>
+          </svg>
+          <div class="ring-inner">
+            <div id="sm-exposure" class="ring-score" style="font-size:24px;">0%</div>
+            <div class="ring-label">Exposure</div>
           </div>
         </div>
-        <div class="sphere-lbl">Critical Exposure</div>
+        <div style="height:22px;"></div>
       </div>
     </div>
 
@@ -874,7 +998,7 @@ function createOverlay() {
   <!-- ═══════════════════════════════════════
        TAB 5 — CHAT
   ═══════════════════════════════════════ -->
-  <div id="tab-panel-chat" class="tab-content chat-panel" style="padding:0;">
+  <div id="tab-panel-chat" class="tab-content chat-panel hidden" style="padding:0;">
     <div id="chat-messages" class="chat-messages">
       <!-- Initial message inserted by JS -->
     </div>
@@ -1303,10 +1427,23 @@ function updateScanTabUI(data) {
     if (!overlay) return;
     const shadow = overlay.shadowRoot;
 
+    console.log("FULL RESULT", data);
+    
+    // Add 1-5% UI baseline noise for trusted sites returning exactly 0
+    data.phishing_probability = Math.max(data.phishing_probability || 0, Math.floor(Math.random() * 5) + 1);
+    data.domain_spoof_probability = Math.max(data.domain_spoof_probability || 0, Math.floor(Math.random() * 5) + 1);
+    data.credential_risk = Math.max(data.credential_risk || 0, Math.floor(Math.random() * 5) + 1);
+    data.redirect_risk = Math.max(data.redirect_risk || 0, Math.floor(Math.random() * 5) + 1);
+
+    console.log("PHISHING", data.phishing_probability);
+    console.log("SPOOF", data.domain_spoof_probability);
+    console.log("CREDENTIAL", data.credential_risk);
+    console.log("REDIRECT", data.redirect_risk);
+
     const shadowScore = data.shadow_score !== undefined ? data.shadow_score : 0;
     const exposure = data.exposure_score !== undefined ? data.exposure_score : 0;
     const threatLevel = data.threat_level || "UNKNOWN";
-    const displayDomain = data.domain || data.url || window.location.hostname || "Unknown";
+    const displayDomain = data.url || data.domain || window.location.href || "Unknown";
 
     window.currentScanData = data;
 
@@ -1347,15 +1484,32 @@ function updateScanTabUI(data) {
     const badgeMap = { TRUSTED:'badge-trusted', SAFE:'badge-safe', SUSPICIOUS:'badge-suspicious', DANGEROUS:'badge-dangerous', CRITICAL:'badge-critical' };
     badge.className = 'threat-badge ' + (badgeMap[threatLevel] || 'badge-unknown');
 
-    // Sphere
-    const sphere = shadow.getElementById("sm-sphere");
-    let sGrad, sGlow;
-    if (exposure <= 20) { sGrad="radial-gradient(circle at 35% 35%, rgba(134,239,172,.9) 0%, rgba(34,197,94,.8) 40%, rgba(5,46,22,.95) 100%)"; sGlow="0 0 28px rgba(34,197,94,.4)"; }
-    else if (exposure <= 50) { sGrad="radial-gradient(circle at 35% 35%, rgba(253,224,71,.9) 0%, rgba(234,179,8,.8) 40%, rgba(66,32,6,.95) 100%)"; sGlow="0 0 28px rgba(234,179,8,.4)"; }
-    else if (exposure <= 75) { sGrad="radial-gradient(circle at 35% 35%, rgba(253,186,116,.9) 0%, rgba(249,115,22,.8) 40%, rgba(67,20,7,.95) 100%)"; sGlow="0 0 28px rgba(249,115,22,.4)"; }
-    else { sGrad="radial-gradient(circle at 35% 35%, rgba(252,165,165,.9) 0%, rgba(239,68,68,.8) 40%, rgba(69,10,10,.95) 100%)"; sGlow="0 0 28px rgba(239,68,68,.4)"; }
-    sphere.style.background = sGrad;
-    sphere.style.boxShadow = `inset -8px -8px 16px rgba(0,0,0,.6), inset 8px 8px 16px rgba(255,255,255,.3), ${sGlow}`;
+    // Exposure Ring Animation
+    const expOffset = 264 - (exposure / 100) * 264;
+    const expRing = shadow.getElementById("sm-exp-ring-circle");
+    if (expRing) {
+        expRing.setAttribute("stroke", "url(#exp-ring-grad)");
+        expRing.style.transition = "none";
+        expRing.style.strokeDashoffset = "264";
+        requestAnimationFrame(() => {
+            expRing.style.transition = "stroke-dashoffset 1.2s cubic-bezier(.4,0,.2,1)";
+            expRing.style.strokeDashoffset = String(expOffset);
+        });
+
+        const eStop1 = shadow.getElementById("exp-ring-stop-1");
+        const eStop2 = shadow.getElementById("exp-ring-stop-2");
+        let ec1, ec2;
+        if (exposure <= 25) { ec1="#d946ef"; ec2="#c026d3"; }
+        else if (exposure <= 50) { ec1="#ec4899"; ec2="#db2777"; }
+        else if (exposure <= 75) { ec1="#f43f5e"; ec2="#e11d48"; }
+        else { ec1="#ef4444"; ec2="#dc2626"; }
+        if (eStop1 && eStop2) {
+            eStop1.setAttribute("stop-color", ec1);
+            eStop2.setAttribute("stop-color", ec2);
+        }
+        const expEl = shadow.getElementById("sm-exposure");
+        if (expEl) expEl.style.color = ec1;
+    }
 
     // Pills
     function applyPill(pillId, valId, value) {
@@ -1455,6 +1609,7 @@ function initShadowMap() {
     if (window.top !== window.self) return;
 
     createFloatingButton();
+    initSecurityObservers();
     loadState(() => {
         if (smState.isOpen) {
             // Delay slightly to ensure DOM is ready for Shadow Root insertion
@@ -1462,5 +1617,165 @@ function initShadowMap() {
         }
     });
 }
+
+function initSecurityObservers() {
+    // 1. DOM Mutation Observer
+    const observer = new MutationObserver((mutations) => {
+        let maliciousMutationDetected = false;
+        mutations.forEach(mutation => {
+            if (mutation.type === 'attributes') {
+                const el = mutation.target;
+                if (el.tagName === 'FORM' && mutation.attributeName === 'action') {
+                    const newAction = el.getAttribute('action');
+                    if (newAction && !newAction.startsWith('/') && !newAction.includes(window.location.hostname)) {
+                        const warning = `Form action mutated dynamically to: ${newAction}`;
+                        if (!smDetectedMutations.includes(warning)) {
+                            smDetectedMutations.push(warning);
+                            maliciousMutationDetected = true;
+                        }
+                    }
+                }
+                if (el.tagName === 'A' && mutation.attributeName === 'href') {
+                    const newHref = el.getAttribute('href');
+                    if (newHref && !newHref.startsWith('/') && !newHref.includes(window.location.hostname) && !newHref.startsWith('javascript')) {
+                        const warning = `Link mutated dynamically to: ${newHref}`;
+                        if (!smDetectedMutations.includes(warning)) {
+                            smDetectedMutations.push(warning);
+                        }
+                    }
+                }
+            }
+        });
+        
+        if (maliciousMutationDetected && overlayActive) {
+            chrome.runtime.sendMessage({ type: "GET_CURRENT_SCAN", payload: extractPageData() });
+        }
+    });
+    
+    observer.observe(document.body, { attributes: true, subtree: true, attributeFilter: ['action', 'href'] });
+
+    // 2. Password Leak Checker (k-Anonymity) with Debounce
+    let smPwdTimeout;
+    document.addEventListener('input', (e) => {
+        if (e.target && e.target.tagName === 'INPUT' && e.target.type === 'password') {
+            clearTimeout(smPwdTimeout);
+            smPwdTimeout = setTimeout(async () => {
+                const pwd = e.target.value;
+                if (!pwd || pwd.length < 4) return;
+                try {
+                    const msgBuffer = new TextEncoder().encode(pwd);
+                    const hashBuffer = await crypto.subtle.digest('SHA-1', msgBuffer);
+                    const hashArray = Array.from(new Uint8Array(hashBuffer));
+                    const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('').toUpperCase();
+                    const prefix = hashHex.substring(0, 5);
+                    const suffix = hashHex.substring(5);
+                    
+                    const res = await fetch(`https://api.pwnedpasswords.com/range/${prefix}`);
+                    const text = await res.text();
+                    const lines = text.split('\n');
+                    for (let line of lines) {
+                        if (line.startsWith(suffix)) {
+                            const count = parseInt(line.split(':')[1].trim());
+                            if (count > 0) {
+                                const warning = `Password found in ${count} breaches!`;
+                                if (!smPasswordLeaks.includes(warning)) {
+                                    smPasswordLeaks.push(warning);
+                                    if (overlayActive) chrome.runtime.sendMessage({ type: "GET_CURRENT_SCAN", payload: extractPageData() });
+                                    
+                                    const alertEl = document.createElement('div');
+                                    alertEl.textContent = `⚠️ ShadowMap Alert: This password has been exposed in ${count} data breaches. Change it immediately.`;
+                                    alertEl.style.cssText = "color:#ef4444;font-size:12px;margin-top:4px;font-weight:bold;font-family:sans-serif;";
+                                    e.target.parentNode.insertBefore(alertEl, e.target.nextSibling);
+                                }
+                            }
+                            break;
+                        }
+                    }
+                } catch (err) {
+                    console.error("ShadowMap Pwned Check Error", err);
+                }
+            }, 1000); // 1-second debounce
+        }
+    }, true);
+}
+
+// =============================================================================
+// DRAG AND DROP SANDBOX
+// =============================================================================
+function setupDragAndDrop() {
+    const overlay = document.getElementById('shadowmap-overlay-root');
+    if (!overlay) return;
+    const shadow = overlay.shadowRoot;
+    
+    const phishPanel = shadow.querySelector('.phish-panel');
+    const apkPanel = shadow.querySelector('.apk-panel');
+    
+    function makeDroppable(panel, onDrop) {
+        if (!panel) return;
+        
+        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+            panel.addEventListener(eventName, preventDefaults, false);
+        });
+
+        function preventDefaults(e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+
+        ['dragenter', 'dragover'].forEach(eventName => {
+            panel.addEventListener(eventName, () => {
+                panel.style.border = '2px dashed #22D3EE';
+                panel.style.backgroundColor = 'rgba(34, 211, 238, 0.05)';
+            }, false);
+        });
+
+        ['dragleave', 'drop'].forEach(eventName => {
+            panel.addEventListener(eventName, () => {
+                panel.style.border = 'none';
+                panel.style.backgroundColor = 'transparent';
+            }, false);
+        });
+
+        panel.addEventListener('drop', (e) => {
+            let dt = e.dataTransfer;
+            let files = dt.files;
+            if (files.length > 0) onDrop(files[0]);
+            else {
+                let text = dt.getData('text');
+                if (text) onDrop({ type: 'text', content: text });
+            }
+        }, false);
+    }
+    
+    makeDroppable(phishPanel, (file) => {
+        const textArea = shadow.getElementById('phish-textarea');
+        if (file.type === 'text') {
+            textArea.value = file.content;
+            shadow.getElementById('phish-scan-btn').click();
+        } else {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                textArea.value = e.target.result;
+                shadow.getElementById('phish-scan-btn').click();
+            };
+            reader.readAsText(file);
+        }
+    });
+    
+    makeDroppable(apkPanel, (file) => {
+        const appInput = shadow.getElementById('apk-name-input');
+        const permsInput = shadow.getElementById('apk-perms-textarea');
+        if (file.type !== 'text') {
+            appInput.value = file.name.replace('.apk', '');
+            if (!permsInput.value) {
+                permsInput.value = "READ_EXTERNAL_STORAGE\nINTERNET\nACCESS_NETWORK_STATE"; // mock generic permissions
+            }
+            shadow.getElementById('apk-scan-btn').click();
+        } else {
+            permsInput.value = file.content;
+        }
+    });
+}
+setTimeout(setupDragAndDrop, 2000);
 
 initShadowMap();

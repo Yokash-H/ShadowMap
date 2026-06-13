@@ -12,15 +12,12 @@ def calculate_shadow_score(url, payload=None, phishing_data=None, trust_score=No
     if phishing_data is None:
         phishing_data = {}
         
+    reasons = []
+    
     # --- Context-Aware Adjustments ---
     path = urlparse(url).path.lower()
     is_sensitive = any(kw in path for kw in ['login', 'signin', 'admin', 'bank', 'secure', 'billing', 'password'])
     is_auth_page = any(kw in path for kw in ['login', 'signin', 'auth'])
-
-    # If it's a sensitive page, lower the base scores to be more aggressive
-    if is_sensitive:
-        trust_score *= 0.9
-        reasons.append(f"Sensitive subpage detected ({path}) - elevated monitoring active.")
 
     # --- Derive/Set Category Scores (Temporary/Initial Implementation) ---
     # These will eventually come from dedicated engines
@@ -75,18 +72,61 @@ def calculate_shadow_score(url, payload=None, phishing_data=None, trust_score=No
             behavior_score -= 20
             reasons.append("HIGH RISK: Low authenticity on sensitive subpage.")
 
+        # Real-time DOM Mutations
+        dom_mutations = payload.get('dom_mutations', [])
+        if dom_mutations:
+            behavior_score -= 50
+            threat_score -= 50
+            for mut in dom_mutations:
+                reasons.append(f"HIGH RISK: Malicious DOM mutation detected -> {mut}")
+
+        # Real-time Network Interceptor
+        network_traffic = payload.get('network_traffic', [])
+        suspicious_c2 = ["analytics", "tracker", "telemetry", "collect", "pixel", "beacon", "logger", "metrics", "log"]
+        exfiltrated = 0
+        for net_url in network_traffic:
+            url_lower = net_url.lower()
+            if any(s in url_lower for s in suspicious_c2) and not (extract_domain(net_url) == domain):
+                exfiltrated += 1
+                if exfiltrated <= 3:
+                    reasons.append(f"DATA EXFILTRATION: Background request sent to {extract_domain(net_url)}")
+        
+        if exfiltrated > 0:
+            threat_score -= (exfiltrated * 10)
+            privacy_score -= (exfiltrated * 15)
+            if exfiltrated > 5:
+                reasons.append(f"CRITICAL: High volume of background data exfiltration detected ({exfiltrated} requests).")
+
+        # Password Leaks
+        password_leaks = payload.get('password_leaks', [])
+        if password_leaks:
+            threat_score -= 60
+            behavior_score -= 60
+            for leak in password_leaks:
+                reasons.append(f"COMPROMISED PASSWORD: {leak}")
+
+    w_trust, w_auth, w_priv, w_threat, w_exp, w_behav = 0.20, 0.20, 0.10, 0.30, 0.10, 0.10
+
+    # Apply sensitive context penalties and weight adjustments
+    if is_sensitive:
+        trust_score *= 0.85
+        w_threat = 0.40
+        w_auth = 0.30
+        w_trust = 0.10
+        w_priv = 0.05
+        w_exp = 0.05
+        reasons.append(f"Sensitive subpage detected ({path}) - Threat and authenticity weights increased.")
+
     # --- Calculate ShadowScore using the new weighted formula ---
     shadow_score = (
-        0.20 * trust_score +
-        0.20 * authenticity_score +
-        0.10 * privacy_score +
-        0.30 * threat_score +
-        0.10 * exposure_score +
-        0.10 * behavior_score
+        w_trust * trust_score +
+        w_auth * authenticity_score +
+        w_priv * privacy_score +
+        w_threat * threat_score +
+        w_exp * exposure_score +
+        w_behav * behavior_score
     )
     shadow_score = max(0, min(100, int(shadow_score)))
-    
-    reasons = [] # Reasons will be collected from individual engines later
 
     # Threat Classification System (New Ranges)
     if shadow_score >= 86:

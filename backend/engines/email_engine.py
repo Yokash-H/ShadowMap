@@ -6,6 +6,13 @@ import os
 import re
 import json
 import google.generativeai as genai
+from transformers import pipeline
+
+# Pre-load the offline NLP model
+try:
+    nlp_sentiment = pipeline("sentiment-analysis", model="distilbert-base-uncased-finetuned-sst-2-english")
+except:
+    nlp_sentiment = None
 
 API_KEY = os.getenv("GEMINI_API_KEY")
 if API_KEY:
@@ -15,8 +22,12 @@ if API_KEY:
 URGENCY_PATTERNS = [
     r'urgent', r'immediately', r'act now', r'within 24 hours', r'account suspended',
     r'verify now', r'limited time', r'expires today', r'last chance', r'final notice',
-    r'your account (will be|has been) (suspended|closed|locked|terminated)',
+    r'your account (will be|has been) (suspended|closed|locked|terminated|hacked)',
     r'unusual (activity|login|sign-in)', r'security alert', r'confirm your identity',
+]
+
+CRITICAL_PATTERNS = [
+    r'hacked', r'compromised', r'stolen', r'breach'
 ]
 
 REWARD_PATTERNS = [
@@ -65,11 +76,22 @@ def heuristic_analyze(text: str) -> dict:
     check_patterns(CREDENTIAL_PATTERNS,"🔑 Credential harvesting language found", 30)
     check_patterns(SPOOFING_PATTERNS,  "🏢 Brand impersonation detected",         20)
     check_patterns(SUSPICIOUS_LINK_PATTERNS, "🔗 Suspicious link pattern found",  15)
+    check_patterns(CRITICAL_PATTERNS,  "🚨 CRITICAL: Hack/Breach language detected", 85)
 
     # Length heuristic — very short texts with links are suspicious
     if len(text) < 200 and re.search(r'https?://', text_lower):
         score += 10
         indicators.append("📏 Short message with embedded link")
+        
+    # Advanced NLP Sentiment Analysis Check
+    if nlp_sentiment:
+        try:
+            sentiment_result = nlp_sentiment(text[:512])[0]
+            if sentiment_result['label'] == 'NEGATIVE' and sentiment_result['score'] > 0.90:
+                score += 85
+                indicators.append(f"🧠 NLP AI detected extreme negative urgency/threat (Score: {sentiment_result['score']:.2f})")
+        except Exception:
+            pass
 
     prob = min(score, 100)
 
@@ -113,8 +135,12 @@ def analyze_email(text: str) -> dict:
 
     heuristic = heuristic_analyze(text)
 
-    if not API_KEY:
+    api_key = os.getenv("GEMINI_API_KEY")
+    # Google API keys typically start with AIzaSy. If it's an OAuth token (like AQ.Ab...), force fallback
+    if not api_key or not api_key.startswith("AIzaSy"):
         return heuristic
+    
+    genai.configure(api_key=api_key)
 
     prompt = f"""You are ShadowMap PhishGuard AI — a cybersecurity expert analyzing potentially malicious messages.
 

@@ -57,13 +57,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         })
         .then(res => res.json())
         .then(data => {
-            if (data && data.result) {
-                chrome.tabs.sendMessage(sender.tab.id, {
-                    type: "UPDATE_OVERLAY_DATA",
-                    data: data.result
-                });
+            if (data.status === "success") {
+                chrome.tabs.sendMessage(sender.tab.id, { type: "SCAN_COMPLETE", data: data.result })
+            } else {
+                chrome.tabs.sendMessage(sender.tab.id, { type: "SCAN_ERROR", error: data.traceback || data.message || "Unknown Error" })
             }
         })
-        .catch(err => console.error("Error fetching scan:", err));
+        .catch(err => {
+            console.error(err);
+            chrome.tabs.sendMessage(sender.tab.id, { type: "SCAN_ERROR", error: err.toString() })
+        });
     }
 });

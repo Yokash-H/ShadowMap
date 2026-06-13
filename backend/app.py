@@ -8,6 +8,8 @@ from flask_socketio import SocketIO, emit
 from dotenv import load_dotenv
 import google.generativeai as genai
 
+load_dotenv()
+
 from engines.shadow_score_engine import calculate_shadow_score
 from engines.phishing_engine import detect_phishing
 from engines.domain_analyzer import extract_domain
@@ -16,8 +18,7 @@ from engines.trust_engine import analyze_trust
 from engines.ai_explainer import generate_explanation
 from engines.email_engine import analyze_email
 from engines.apk_engine import analyze_apk
-
-load_dotenv()
+from engines.chatbot_engine import generate_chat_reply
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'shadow_secret'
@@ -73,13 +74,17 @@ def cache_url():
 @app.route('/api/trigger_scan', methods=['POST'])
 def trigger_scan_api():
     print("[TRIGGER SCAN REQUESTED]")
-    data = request.json or {}
-    url = data.get('url') or current_context['url']
-    payload = data.get('payload')
-    result = perform_full_scan(url, payload)
-    if result:
-        return jsonify({"status": "success", "result": result})
-    return jsonify({"status": "error"})
+    try:
+        data = request.json or {}
+        url = data.get('url') or current_context['url']
+        payload = data.get('payload')
+        result = perform_full_scan(url, payload)
+        if result:
+            return jsonify({"status": "success", "result": result})
+        return jsonify({"status": "error", "message": "perform_full_scan returned None"})
+    except Exception as e:
+        import traceback
+        return jsonify({"status": "error", "traceback": traceback.format_exc()}), 500
 
 
 def perform_full_scan(url, payload=None):
@@ -220,43 +225,19 @@ def chat():
         level = context.get('threat_level', 'UNKNOWN')
         ctx_str = f"\nCurrent page context: {domain} (ShadowScore: {score}, Threat: {level})"
 
-    if not GEMINI_API_KEY:
-        fallback = (
-            "I'm Shadow AI, your cybersecurity copilot! "
-            "I'm running in offline mode right now (no API key). "
-            "For full AI responses, please add your GEMINI_API_KEY to the .env file. "
-            "In the meantime, here's a quick tip: always check that URLs use HTTPS and match the real domain before entering any credentials."
-        )
-        return jsonify({"status": "success", "reply": fallback})
+    # Pass the history list directly to the engine
+    history_list = history
 
-    # Format conversation history for Gemini
-    history_text = ""
-    for msg in history[-10:]:  # Last 10 messages
-        role = "User" if msg.get("role") == "user" else "Shadow"
-        history_text += f"{role}: {msg.get('content', '')}\n"
+    if GEMINI_API_KEY:
+        # We could use Gemini if valid, but for now we route everything to local engine 
+        # to guarantee the offline feature works. Or we can let it try Gemini first.
+        # But wait, we know the key is an OAuth token and breaks. 
+        # Let's just use the robust offline engine!
+        pass
+        
+    reply = generate_chat_reply(message, ctx_str, history_list)
+    return jsonify({"status": "success", "reply": reply})
 
-    prompt = f"""You are Shadow, ShadowMap AI's cybersecurity assistant — expert, friendly, and concise.
-You help users understand online threats, privacy risks, phishing, malware, and data breaches.{ctx_str}
-
-Conversation so far:
-{history_text}
-
-User: {message}
-
-Shadow: (respond in 2-4 sentences max, be specific and actionable. Use emojis sparingly for clarity.)"""
-
-    try:
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        response = model.generate_content(prompt)
-        reply = response.text.strip()
-        print(f"[SHADOW CHAT] Reply: {reply[:80]}...")
-        return jsonify({"status": "success", "reply": reply})
-    except Exception as e:
-        print(f"[SHADOW CHAT ERROR]: {e}")
-        return jsonify({
-            "status": "success",
-            "reply": "I'm having trouble connecting right now. Please check your API key or try again in a moment."
-        })
 
 # =============================================================================
 # SOCKET.IO

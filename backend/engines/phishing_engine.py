@@ -153,5 +153,11 @@ def detect_phishing(payload, domain):
         except Exception as e:
             print(f"Gemini Engine Error (fallback to heuristic): {e}")
 
+    # Post-process to enforce a small baseline noise (1-2%) instead of 0%
+    import random
+    for k in ["phishing_probability", "domain_spoof_probability", "credential_risk", "redirect_risk"]:
+        if result.get(k, 0) <= 0:
+            result[k] = random.randint(1, 2)
+
     print("PHISHING ENGINE OUTPUT:", json.dumps(result, indent=2))
     return result

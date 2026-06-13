@@ -16,3 +16,6 @@ build/
 .next/
 
 *.log
+*.db
+test_res.json
+test_res_gemini.json
