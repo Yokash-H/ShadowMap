@@ -155,15 +155,5 @@ start.bat
 5. Browse any website and press **F4** to summon your AI Copilot!
 
 ---
-
-## 🏆 Why Evaluators Love ShadowMap AI
-
-* **Privacy-First Design:** Proving that a powerful AI copilot can run entirely offline on consumer hardware is a massive technical achievement.
-* **Real-World Application:** It dynamically hooks into modern web frameworks via synthetic DOM events to provide real-time protection like password generation on the fly.
-* **Actionable Intelligence:** It doesn't just tell you a site is "bad." It explains *why* using the local LLM and gives you the tools to remediate it instantly.
-
----
-
-<div align="center">
   <p>Built with ❤️ and ☕ for the future of decentralized security.</p>
 </div>
