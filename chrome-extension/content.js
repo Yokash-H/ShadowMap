@@ -85,7 +85,25 @@ function unblockCurrentSite() {
 // =============================================================================
 
 function extractPageData() {
-    const data = { url: window.location.href, hostname: window.location.hostname, title: document.title, trackers: [], forms: [] };
+    let redirectCount = 0;
+    try {
+        const navs = performance.getEntriesByType('navigation');
+        if (navs.length > 0) {
+            redirectCount = navs[0].redirectCount || 0;
+        }
+    } catch (e) {}
+    
+    const hasMetaRefresh = !!document.querySelector('meta[http-equiv="refresh"]');
+
+    const data = { 
+        url: window.location.href, 
+        hostname: window.location.hostname, 
+        title: document.title, 
+        trackers: [], 
+        forms: [],
+        redirects: redirectCount,
+        metaRefresh: hasMetaRefresh
+    };
     const signatures = {
         'Google Analytics': 'google-analytics', 'Google Tag Manager': 'googletagmanager.com',
         'Meta Pixel': 'fbevents.js', 'TikTok Pixel': 'analytics.tiktok.com', 'Hotjar': 'hotjar.com', 'FingerprintJS': 'fingerprintjs'
@@ -1445,6 +1463,343 @@ function initInteractivity(shadow, wrapper) {
         }
     });
 }
+
+// =============================================================================
+// CREDENTIAL FIREWALL & FORM INTERCEPTION ENGINE
+// =============================================================================
+
+function generateDecoyIdentity() {
+    const firstNames = ["James", "John", "Robert", "Michael", "William", "David", "Richard", "Joseph", "Thomas", "Charles", "Sarah", "Emily", "Jessica", "Ashley", "Amanda", "Megan", "Jennifer", "Karen", "Rachel", "Donna"];
+    const lastNames = ["Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller", "Davis", "Rodriguez", "Martinez", "Hernandez", "Lopez", "Gonzalez", "Wilson", "Anderson", "Thomas", "Taylor", "Moore", "Jackson", "Martin"];
+    const domains = ["gmail.com", "yahoo.com", "outlook.com", "hotmail.com", "icloud.com", "mail.com", "zoho.com", "protonmail.com"];
+    
+    const first = firstNames[Math.floor(Math.random() * firstNames.length)];
+    const last = lastNames[Math.floor(Math.random() * lastNames.length)];
+    const num = Math.floor(Math.random() * 9000) + 1000;
+    
+    const email = `${first.toLowerCase()}.${last.toLowerCase()}${num}@${domains[Math.floor(Math.random() * domains.length)]}`;
+    const username = `${first.toLowerCase()}${last}${num}`;
+    
+    // Alphanumeric strong password
+    const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*";
+    let password = "";
+    for (let i = 0; i < 12; i++) {
+        password += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    
+    // Fake Card Number (Luhn algorithm compliant for Visa card)
+    let card = "4"; 
+    for (let i = 0; i < 14; i++) {
+        card += Math.floor(Math.random() * 10);
+    }
+    let sum = 0;
+    let shouldDouble = true;
+    for (let i = card.length - 1; i >= 0; i--) {
+        let digit = parseInt(card.charAt(i));
+        if (shouldDouble) {
+            digit *= 2;
+            if (digit > 9) digit -= 9;
+        }
+        sum += digit;
+        shouldDouble = !shouldDouble;
+    }
+    const checksum = (10 - (sum % 10)) % 10;
+    card += checksum;
+
+    const phone = "+1 (555) " + (Math.floor(Math.random() * 900) + 100) + "-" + (Math.floor(Math.random() * 9000) + 1000);
+
+    return {
+        email: email,
+        username: username,
+        password: password,
+        cardNumber: card,
+        phone: phone
+    };
+}
+
+async function showFirewallOverlay(url, payload) {
+    return new Promise(async (resolve) => {
+        if (!document.getElementById("shadowmap-overlay-root")) {
+            createOverlay();
+        }
+        const shadow = getShadow();
+        if (!shadow) {
+            resolve({ action: 'allow' });
+            return;
+        }
+
+        let riskScore = 0;
+        let reasons = ["Suspicious form submission context detected."];
+        let domain = window.location.hostname;
+        let threatLevel = "SUSPICIOUS";
+
+        if (window.currentScanData) {
+            riskScore = window.currentScanData.risk_score || (100 - window.currentScanData.shadow_score) || 0;
+            reasons = window.currentScanData.reasons || reasons;
+            threatLevel = window.currentScanData.threat_level || threatLevel;
+        } else {
+            try {
+                const res = await fetch(`${BACKEND}/api/trigger_scan`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url: window.location.href, payload: extractPageData() })
+                });
+                const data = await res.json();
+                if (data && data.result) {
+                    window.currentScanData = data.result;
+                    riskScore = data.result.risk_score || (100 - data.result.shadow_score) || 0;
+                    reasons = data.result.reasons || reasons;
+                    threatLevel = data.result.threat_level || threatLevel;
+                }
+            } catch (e) {
+                console.error("Failed to query backend for firewall check:", e);
+            }
+        }
+
+        if (riskScore <= 30) {
+            resolve({ action: 'allow' });
+            return;
+        }
+
+        const container = shadow.querySelector('.wrapper').parentNode;
+        
+        const existing = shadow.getElementById('shadowmap-firewall-overlay');
+        if (existing) existing.remove();
+
+        const firewallDiv = document.createElement('div');
+        firewallDiv.id = 'shadowmap-firewall-overlay';
+        
+        Object.assign(firewallDiv.style, {
+            position: 'fixed',
+            top: 0, left: 0,
+            width: '100vw', height: '100vh',
+            background: 'rgba(5, 8, 16, 0.95)',
+            zIndex: 2147483647,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontFamily: "'Inter', sans-serif",
+            color: '#ffffff'
+        });
+
+        const isHighRisk = riskScore >= 71 || threatLevel === 'CRITICAL' || threatLevel === 'DANGEROUS';
+        const colorAccent = isHighRisk ? '#ef4444' : '#f59e0b';
+        const borderGlow = isHighRisk ? '0 0 35px rgba(239, 68, 68, 0.35)' : '0 0 35px rgba(245, 158, 11, 0.35)';
+
+        let reasonsLiHtml = reasons.map(r => `<li>• ${r}</li>`).join('');
+
+        firewallDiv.innerHTML = `
+            <div style="width: 460px; background: linear-gradient(160deg, #0d1220 0%, #080c14 100%);
+                        border: 2px solid ${colorAccent}; border-radius: 16px; padding: 28px;
+                        box-shadow: ${borderGlow}; text-align: left; display: flex; flex-direction: column; gap: 20px;">
+                
+                <div style="display: flex; align-items: center; gap: 14px;">
+                    <span style="font-size: 32px;">⚠️</span>
+                    <div>
+                        <h2 style="font-size: 18px; font-weight: 700; color: ${colorAccent}; margin: 0;">Potential Credential Theft Detected</h2>
+                        <p style="font-size: 12px; color: #94a3b8; margin: 2px 0 0;">ShadowMap intercepted your submission before it leaked.</p>
+                    </div>
+                </div>
+
+                <div style="background: rgba(255,255,255,0.03); border-radius: 8px; padding: 12px 16px; display: flex; justify-content: space-between; align-items: center;">
+                    <span style="font-size: 13px; color: #cbd5e1; font-weight: 500;">Risk Score:</span>
+                    <span style="font-size: 20px; font-weight: 700; font-family: 'JetBrains Mono', monospace; color: ${colorAccent};">${riskScore}/100</span>
+                </div>
+
+                <div>
+                    <h3 style="font-size: 11px; font-weight: 600; color: #64748b; text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 6px;">Flags Raised:</h3>
+                    <ul style="list-style: none; font-size: 11px; color: #cbd5e1; padding: 0; margin: 0; line-height: 1.6; display: flex; flex-direction: column; gap: 4px;">
+                        ${reasonsLiHtml}
+                    </ul>
+                </div>
+
+                <div style="display: flex; flex-direction: column; gap: 10px; margin-top: 10px;">
+                    <button id="sm-fw-leave" style="padding: 12px; border-radius: 8px; border: none; background: #ef4444; color: white; font-weight: 700; font-size: 13px; cursor: pointer; transition: all 0.2s;">
+                        🚪 Leave Website (Recommended)
+                    </button>
+                    
+                    <button id="sm-fw-decoy" style="padding: 12px; border-radius: 8px; border: 1px solid rgba(34, 211, 238, 0.4); background: rgba(34, 211, 238, 0.08); color: #22d3ee; font-weight: 700; font-size: 13px; cursor: pointer; transition: all 0.2s;">
+                        🎭 Submit Decoy Identity
+                    </button>
+
+                    <button id="sm-fw-override" style="padding: 10px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.1); background: transparent; color: #64748b; font-weight: 500; font-size: 12px; cursor: pointer; transition: all 0.2s;">
+                        Proceed Anyway
+                    </button>
+                </div>
+
+                <div id="sm-fw-confirm-section" style="display: none; flex-direction: column; gap: 12px; padding-top: 14px; border-top: 1px solid rgba(255,255,255,0.06);">
+                    <div style="display: flex; gap: 8px; align-items: flex-start;">
+                        <input type="checkbox" id="sm-fw-chk-1" style="margin-top: 3px; cursor: pointer;">
+                        <label for="sm-fw-chk-1" style="font-size: 11px; color: #cbd5e1; cursor: pointer; line-height: 1.4;">
+                            I understand this site is flagged as high-risk and my credentials may be stolen.
+                        </label>
+                    </div>
+                    <div style="display: flex; flex-direction: column; gap: 6px;">
+                        <span style="font-size: 11px; color: #94a3b8;">Type <strong style="color: #ef4444;">CONFIRM</strong> to release your real data:</span>
+                        <input type="text" id="sm-fw-txt-confirm" placeholder="Type CONFIRM here" style="background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.15); border-radius: 6px; padding: 8px 10px; color: white; font-size: 12px; outline: none; font-family: 'JetBrains Mono', monospace;">
+                    </div>
+                    <div style="display: flex; gap: 8px;">
+                        <button id="sm-fw-cancel-override" style="flex: 1; padding: 8px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.1); background: transparent; color: #cbd5e1; font-size: 11px; cursor: pointer;">
+                            Cancel
+                        </button>
+                        <button id="sm-fw-confirm-release" disabled style="flex: 1; padding: 8px; border-radius: 6px; border: none; background: #ef4444; color: white; font-weight: 600; font-size: 11px; cursor: not-allowed; opacity: 0.5;">
+                            Release Credentials
+                        </button>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        container.appendChild(firewallDiv);
+
+        const btnLeave = firewallDiv.querySelector('#sm-fw-leave');
+        const btnDecoy = firewallDiv.querySelector('#sm-fw-decoy');
+        const btnOverride = firewallDiv.querySelector('#sm-fw-override');
+        const confirmSection = firewallDiv.querySelector('#sm-fw-confirm-section');
+        const chkConfirm = firewallDiv.querySelector('#sm-fw-chk-1');
+        const txtConfirm = firewallDiv.querySelector('#sm-fw-txt-confirm');
+        const btnCancelOverride = firewallDiv.querySelector('#sm-fw-cancel-override');
+        const btnConfirmRelease = firewallDiv.querySelector('#sm-fw-confirm-release');
+
+        const logIncident = (actionName) => {
+            fetch(`${BACKEND}/api/log_incident`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    domain: domain,
+                    risk_score: riskScore,
+                    action: actionName
+                })
+            }).catch(e => console.error("Failed to log incident:", e));
+        };
+
+        btnLeave.addEventListener('click', () => {
+            logIncident('leave');
+            firewallDiv.remove();
+            try {
+                chrome.runtime.sendMessage({ type: "CLOSE_TAB" });
+            } catch(e) {}
+            window.location.href = "about:blank";
+            resolve({ action: 'block' });
+        });
+
+        btnDecoy.addEventListener('click', () => {
+            logIncident('decoy');
+            firewallDiv.remove();
+            const decoyPayload = generateDecoyIdentity();
+            resolve({ action: 'decoy', decoyData: decoyPayload });
+        });
+
+        btnOverride.addEventListener('click', () => {
+            confirmSection.style.display = 'flex';
+            btnOverride.style.display = 'none';
+        });
+
+        btnCancelOverride.addEventListener('click', () => {
+            confirmSection.style.display = 'none';
+            btnOverride.style.display = 'block';
+        });
+
+        const validateConfirmation = () => {
+            const isChecked = chkConfirm.checked;
+            const textMatch = txtConfirm.value.trim() === 'CONFIRM';
+            if (isChecked && textMatch) {
+                btnConfirmRelease.disabled = false;
+                btnConfirmRelease.style.opacity = '1';
+                btnConfirmRelease.style.cursor = 'pointer';
+            } else {
+                btnConfirmRelease.disabled = true;
+                btnConfirmRelease.style.opacity = '0.5';
+                btnConfirmRelease.style.cursor = 'not-allowed';
+            }
+        };
+
+        chkConfirm.addEventListener('change', validateConfirmation);
+        txtConfirm.addEventListener('input', validateConfirmation);
+
+        btnConfirmRelease.addEventListener('click', () => {
+            logIncident('override');
+            firewallDiv.remove();
+            resolve({ action: 'allow' });
+        });
+    });
+}
+
+// Listen for custom API interception event from main-world intercept.js
+window.addEventListener('shadowmap-firewall-intercept', async (e) => {
+    const { requestId, type, url, payload } = e.detail;
+    const decision = await showFirewallOverlay(url, payload);
+    const responseEvent = new CustomEvent('shadowmap-firewall-response-' + requestId, {
+        detail: {
+            requestId: requestId,
+            action: decision.action,
+            decoyData: decision.decoyData
+        }
+    });
+    window.dispatchEvent(responseEvent);
+});
+
+// Capture-phase listener for traditional HTML form submit events
+window.addEventListener('submit', async (e) => {
+    if (e.target.dataset.smApproved === 'true') {
+        return;
+    }
+
+    const form = e.target;
+    const inputs = Array.from(form.querySelectorAll('input'));
+    const hasSensitiveFields = inputs.some(input => {
+        const type = (input.type || '').toLowerCase();
+        const name = (input.name || '').toLowerCase();
+        const id = (input.id || '').toLowerCase();
+        
+        return type === 'password' || 
+               name.includes('password') || name.includes('otp') || name.includes('card') ||
+               id.includes('password') || id.includes('otp') || id.includes('card');
+    });
+
+    if (!hasSensitiveFields) {
+        return;
+    }
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    console.warn("SHADOWMAP FIREWALL: Intercepted HTML Form Submission.");
+    
+    const formData = new FormData(form);
+    const payloadEntries = [];
+    for (let [key, val] of formData.entries()) {
+        payloadEntries.push(key + '=' + val);
+    }
+    const payloadStr = payloadEntries.join('&');
+
+    const decision = await showFirewallOverlay(window.location.href, payloadStr);
+    
+    if (decision.action === 'allow') {
+        form.dataset.smApproved = 'true';
+        form.submit();
+    } else if (decision.action === 'decoy') {
+        const fakeData = decision.decoyData;
+        inputs.forEach(input => {
+            const name = (input.name || '').toLowerCase();
+            const id = (input.id || '').toLowerCase();
+            const type = (input.type || '').toLowerCase();
+
+            if (type === 'password' || name.includes('password') || id.includes('password')) {
+                input.value = fakeData.password;
+            } else if (type === 'email' || name.includes('email') || id.includes('email') || name.includes('user') || id.includes('user')) {
+                input.value = fakeData.email;
+            } else if (type === 'tel' || name.includes('phone') || id.includes('phone') || name.includes('mobile') || id.includes('mobile')) {
+                input.value = fakeData.phone;
+            } else if (name.includes('card') || id.includes('card') || name.includes('number') || id.includes('number')) {
+                input.value = fakeData.cardNumber;
+            }
+        });
+        
+        form.dataset.smApproved = 'true';
+        form.submit();
+    }
+}, true);
 
 // =============================================================================
 // STARTUP

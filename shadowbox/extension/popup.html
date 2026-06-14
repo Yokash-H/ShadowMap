@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ShadowBox</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      width: 380px;
+      min-height: 420px;
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      background: #0a0e17;
+      color: #e2e8f0;
+      overflow-x: hidden;
+    }
+
+    .header {
+      background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%);
+      padding: 16px 20px;
+      border-bottom: 1px solid rgba(99, 102, 241, 0.2);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .header-icon {
+      width: 32px;
+      height: 32px;
+      background: linear-gradient(135deg, #6366f1, #8b5cf6);
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+    }
+
+    .header h1 {
+      font-size: 16px;
+      font-weight: 700;
+      background: linear-gradient(90deg, #c7d2fe, #a78bfa);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .header p {
+      font-size: 10px;
+      color: #64748b;
+      margin-top: 2px;
+    }
+
+    .status-bar {
+      padding: 10px 20px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(16, 185, 129, 0.05);
+      border-bottom: 1px solid rgba(16, 185, 129, 0.1);
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #10b981;
+      animation: pulse 2s infinite;
+    }
+
+    .status-dot.offline {
+      background: #ef4444;
+      animation: none;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+
+    .status-text {
+      font-size: 11px;
+      color: #94a3b8;
+    }
+
+    .content {
+      padding: 16px 20px;
+    }
+
+    .upload-zone {
+      border: 2px dashed rgba(99, 102, 241, 0.3);
+      border-radius: 12px;
+      padding: 24px 16px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      background: rgba(99, 102, 241, 0.02);
+      margin-bottom: 16px;
+    }
+
+    .upload-zone:hover {
+      border-color: #6366f1;
+      background: rgba(99, 102, 241, 0.08);
+    }
+
+    .upload-zone .icon { font-size: 28px; margin-bottom: 8px; }
+    .upload-zone .title { font-size: 13px; font-weight: 600; color: #c7d2fe; }
+    .upload-zone .subtitle { font-size: 11px; color: #64748b; margin-top: 4px; }
+
+    input[type="file"] { display: none; }
+
+    .section-title {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      color: #64748b;
+      margin-bottom: 10px;
+      font-weight: 600;
+    }
+
+    .analysis-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .analysis-item {
+      background: rgba(30, 41, 59, 0.6);
+      border: 1px solid rgba(99, 102, 241, 0.1);
+      border-radius: 10px;
+      padding: 12px 14px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .analysis-item:hover {
+      background: rgba(30, 41, 59, 0.9);
+      border-color: rgba(99, 102, 241, 0.3);
+      transform: translateY(-1px);
+    }
+
+    .analysis-item .name {
+      font-size: 12px;
+      font-weight: 600;
+      color: #e2e8f0;
+      margin-bottom: 4px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .analysis-item .meta {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .analysis-item .time {
+      font-size: 10px;
+      color: #64748b;
+    }
+
+    .badge {
+      font-size: 9px;
+      font-weight: 700;
+      text-transform: uppercase;
+      padding: 3px 8px;
+      border-radius: 6px;
+      letter-spacing: 0.5px;
+    }
+
+    .badge.safe { background: rgba(16, 185, 129, 0.15); color: #34d399; }
+    .badge.suspicious { background: rgba(245, 158, 11, 0.15); color: #fbbf24; }
+    .badge.dangerous { background: rgba(239, 68, 68, 0.15); color: #f87171; }
+    .badge.running { background: rgba(99, 102, 241, 0.15); color: #a78bfa; }
+    .badge.pending { background: rgba(100, 116, 139, 0.15); color: #94a3b8; }
+    .badge.error { background: rgba(239, 68, 68, 0.1); color: #f87171; }
+
+    .empty-state {
+      text-align: center;
+      padding: 30px 16px;
+      color: #475569;
+    }
+
+    .empty-state .icon { font-size: 32px; margin-bottom: 8px; }
+    .empty-state .text { font-size: 12px; }
+
+    .footer {
+      padding: 12px 20px;
+      border-top: 1px solid rgba(99, 102, 241, 0.1);
+      text-align: center;
+    }
+
+    .open-dashboard {
+      width: 100%;
+      padding: 10px;
+      border: none;
+      border-radius: 8px;
+      background: linear-gradient(135deg, #6366f1, #8b5cf6);
+      color: white;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .open-dashboard:hover {
+      opacity: 0.9;
+      transform: translateY(-1px);
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="header-icon">🔬</div>
+    <div>
+      <h1>ShadowBox</h1>
+      <p>Consequence Visualization Engine</p>
+    </div>
+  </div>
+
+  <div class="status-bar">
+    <div class="status-dot" id="statusDot"></div>
+    <span class="status-text" id="statusText">Checking connection...</span>
+  </div>
+
+  <div class="content">
+    <div class="upload-zone" id="uploadZone" onclick="document.getElementById('fileInput').click()">
+      <div class="icon">📁</div>
+      <div class="title">Upload File for Analysis</div>
+      <div class="subtitle">Supports .sh, .py, .jar, .apk</div>
+    </div>
+    <input type="file" id="fileInput" accept=".sh,.py,.jar,.apk">
+
+    <div class="section-title">Recent Analyses</div>
+    <div class="analysis-list" id="analysisList">
+      <div class="empty-state">
+        <div class="icon">📭</div>
+        <div class="text">No analyses yet. Upload a file to get started.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="footer">
+    <button class="open-dashboard" id="openDashboard">Open Full Dashboard ↗</button>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

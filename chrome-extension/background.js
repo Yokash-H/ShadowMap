@@ -46,6 +46,9 @@ chrome.commands.onCommand.addListener(async (command) => {
 
 // UI Data Request Loop
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message.type === "CLOSE_TAB" && sender.tab) {
+        chrome.tabs.remove(sender.tab.id);
+    }
     if (message.type === "GET_CURRENT_SCAN") {
         fetch('http://127.0.0.1:5000/api/trigger_scan', {
             method: 'POST',

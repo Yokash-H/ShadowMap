@@ -28,6 +28,15 @@
       "css": [
         "overlay.css"
       ]
+    },
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "intercept.js"
+      ],
+      "world": "MAIN"
     }
   ],
   "action": {

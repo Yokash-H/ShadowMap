@@ -1,0 +1,1 @@
+# ShadowBox intent package

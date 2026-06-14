@@ -1,0 +1,1 @@
+# ShadowBox telemetry package
